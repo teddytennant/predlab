@@ -1,0 +1,132 @@
+"""
+Simple in-memory order book (Phase 1 foundation).
+
+Dataclass-based per-market (keyed by clob_token_id or market+token).
+Basic price-time priority matching for limit orders only.
+Later: move to Redis + more sophisticated engine (IOC, post-only, fees, self-trade prevention).
+
+This is the core of the paper trading CLOB simulator.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from datetime import datetime
+from typing import Any
+
+
+@dataclass
+class OrderBookEntry:
+    """A single resting order in the book."""
+
+    id: int  # our DB order id
+    user_id: int
+    price: float
+    size: float  # remaining
+    side: str  # "buy" or "sell"
+    created_at: datetime = field(default_factory=datetime.utcnow)
+
+
+@dataclass
+class OrderBook:
+    """In-memory order book for one outcome leg (one clob token id).
+
+    Bids: highest price first (max-heap like, we sort on access)
+    Asks: lowest price first
+    """
+
+    token_id: str
+    bids: list[OrderBookEntry] = field(default_factory=list)  # buys, sorted desc price
+    asks: list[OrderBookEntry] = field(default_factory=list)  # sells, sorted asc price
+
+    def _sort(self) -> None:
+        self.bids.sort(key=lambda e: (-e.price, e.created_at))
+        self.asks.sort(key=lambda e: (e.price, e.created_at))
+
+    def add_limit_order(self, entry: OrderBookEntry) -> list[dict[str, Any]]:
+        """Add a limit order and attempt immediate matching. Returns list of fills."""
+        self._sort()
+        fills: list[dict[str, Any]] = []
+
+        if entry.side == "buy":
+            # Match against asks
+            remaining = entry.size
+            i = 0
+            while i < len(self.asks) and remaining > 0:
+                ask = self.asks[i]
+                if ask.price > entry.price:
+                    break  # no cross
+                fill_qty = min(remaining, ask.size)
+                fills.append(
+                    {
+                        "price": ask.price,
+                        "size": fill_qty,
+                        "side": "buy",
+                        "counter_order_id": ask.id,
+                    }
+                )
+                ask.size -= fill_qty
+                remaining -= fill_qty
+                if ask.size <= 0:
+                    self.asks.pop(i)
+                else:
+                    i += 1
+            if remaining > 0:
+                entry.size = remaining
+                self.bids.append(entry)
+        else:  # sell
+            remaining = entry.size
+            i = 0
+            while i < len(self.bids) and remaining > 0:
+                bid = self.bids[i]
+                if bid.price < entry.price:
+                    break
+                fill_qty = min(remaining, bid.size)
+                fills.append(
+                    {
+                        "price": bid.price,
+                        "size": fill_qty,
+                        "side": "sell",
+                        "counter_order_id": bid.id,
+                    }
+                )
+                bid.size -= fill_qty
+                remaining -= fill_qty
+                if bid.size <= 0:
+                    self.bids.pop(i)
+                else:
+                    i += 1
+            if remaining > 0:
+                entry.size = remaining
+                self.asks.append(entry)
+
+        self._sort()
+        return fills
+
+    def snapshot(self) -> dict[str, Any]:
+        """Return current book snapshot (top of book etc)."""
+        self._sort()
+        return {
+            "token_id": self.token_id,
+            "bids": [{"price": e.price, "size": e.size, "order_id": e.id} for e in self.bids[:10]],
+            "asks": [{"price": e.price, "size": e.size, "order_id": e.id} for e in self.asks[:10]],
+        }
+
+
+# Global in-memory books (keyed by token id). Phase 1 only — later Redis.
+_order_books: dict[str, OrderBook] = {}
+
+
+def get_orderbook(token_id: str) -> OrderBook:
+    if token_id not in _order_books:
+        _order_books[token_id] = OrderBook(token_id=token_id)
+    return _order_books[token_id]
+
+
+def reset_orderbook(token_id: str | None = None) -> None:
+    """For tests / admin resets."""
+    global _order_books
+    if token_id:
+        _order_books.pop(token_id, None)
+    else:
+        _order_books.clear()
