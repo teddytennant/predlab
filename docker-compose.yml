@@ -1,6 +1,24 @@
 version: '3.8'
 
 services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: predlab
+      POSTGRES_PASSWORD: predlab
+      POSTGRES_DB: postgres
+      POSTGRES_MULTIPLE_DATABASES: polymarket,kalshi
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./docker/postgres/init-db.sh:/docker-entrypoint-initdb.d/init-db.sh:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U predlab"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
   polymarket-sim:
     build:
       context: ./polymarket-sim
@@ -9,9 +27,10 @@ services:
       - "8001:8001"
     environment:
       - PORT=8001
-      - DATABASE_URL=sqlite:///data/polymarket.db
-    volumes:
-      - ./polymarket-sim/data:/app/data
+      - DATABASE_URL=postgresql+psycopg2://predlab:predlab@postgres:5432/polymarket
+    depends_on:
+      postgres:
+        condition: service_healthy
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8001/health"]
@@ -26,9 +45,10 @@ services:
       - "8002:8002"
     environment:
       - PORT=8002
-      - DATABASE_URL=sqlite:///data/kalshi_sim.db
-    volumes:
-      - ./kalshi-sim/data:/app/data
+      - DATABASE_URL=postgresql+psycopg2://predlab:predlab@postgres:5432/kalshi
+    depends_on:
+      postgres:
+        condition: service_healthy
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8002/health"]
@@ -36,5 +56,5 @@ services:
       timeout: 5s
       retries: 3
 
-# Future: could add redis, postgres, or even the TUI as a service if desired.
-# For now this gives a one-command way to bring up both paper trading environments.
+volumes:
+  postgres_data:
