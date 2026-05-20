@@ -1,0 +1,40 @@
+version: '3.8'
+
+services:
+  polymarket-sim:
+    build:
+      context: ./polymarket-sim
+      dockerfile: Dockerfile
+    ports:
+      - "8001:8001"
+    environment:
+      - PORT=8001
+      - DATABASE_URL=sqlite:///data/polymarket.db
+    volumes:
+      - ./polymarket-sim/data:/app/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8001/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  kalshi-sim:
+    build:
+      context: ./kalshi-sim
+    ports:
+      - "8002:8002"
+    environment:
+      - PORT=8002
+      - DATABASE_URL=sqlite:///data/kalshi_sim.db
+    volumes:
+      - ./kalshi-sim/data:/app/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8002/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+# Future: could add redis, postgres, or even the TUI as a service if desired.
+# For now this gives a one-command way to bring up both paper trading environments.

@@ -1,0 +1,39 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "predlab"
+version = "0.3.0"
+description = "PredLab - Admin & Student TUI for the school Prediction Markets Club (Polymarket + Kalshi paper trading)"
+readme = "README.md"
+requires-python = ">=3.10"
+license = {text = "MIT"}
+authors = [
+  {name = "School Prediction Markets Club"}
+]
+
+dependencies = [
+    "rich>=13.0",
+    "requests>=2.31",
+]
+
+[project.scripts]
+predlab = "predlab.cli:main"
+
+[project.optional-dependencies]
+dev = [
+    "ruff",
+    "mypy",
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.ruff]
+line-length = 100
+
+[tool.mypy]
+python_version = "3.10"
+strict = true
+ignore_missing_imports = true
