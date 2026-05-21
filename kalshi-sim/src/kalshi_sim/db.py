@@ -72,7 +72,28 @@ def init_db() -> None:
     )
 
     Base.metadata.create_all(bind=_engine)
+    _ensure_role_column(_engine)
     logger.info("Database tables ensured (clean SQLite dev mode)")
+
+
+def _ensure_role_column(engine) -> None:
+    """Lightweight migration: add users.role to pre-existing databases.
+
+    create_all() never alters an existing table, so a DB created before roles
+    existed would be missing the column. Idempotent across Postgres and SQLite.
+    """
+    from sqlalchemy import inspect, text
+
+    insp = inspect(engine)
+    if "users" not in insp.get_table_names():
+        return
+    cols = {c["name"] for c in insp.get_columns("users")}
+    if "role" not in cols:
+        with engine.begin() as conn:
+            conn.execute(
+                text("ALTER TABLE users ADD COLUMN role VARCHAR(16) NOT NULL DEFAULT 'member'")
+            )
+        logger.info("Migrated users table: added role column (default 'member').")
 
 
 def get_db() -> Iterator[Session]:

@@ -6,6 +6,7 @@
 """
 import base64
 import logging
+import secrets as _secrets
 import time as _time
 from datetime import datetime
 from typing import Optional
@@ -14,7 +15,7 @@ from uuid import uuid4
 from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import padding, rsa
-from fastapi import APIRouter, Depends, Header, HTTPException
+from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from sqlalchemy.orm import Session
 
 from ..config import get_settings
@@ -26,32 +27,84 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/trade-api/v2", tags=["auth"])
 
+# Role hierarchy. Higher rank ⊇ lower rank's powers.
+ROLE_RANK: dict[str, int] = {"member": 0, "admin": 1, "owner": 2}
+VALID_ROLES = frozenset(ROLE_RANK)
+
+
+def resolve_admin_rank(
+    db: Session,
+    method: str,
+    path: str,
+    access_key: Optional[str],
+    signature: Optional[str],
+    timestamp: Optional[str],
+    admin_secret: Optional[str],
+) -> int:
+    """Effective role rank of a caller hitting an admin-gated endpoint.
+
+    The club admin secret authenticates as ``owner`` (bootstrap / break-glass).
+    A validly signed request from an admin/owner user authenticates as their role.
+    Anything else → ``-1``. (Signature failures raise 401 via require_signed_auth.)
+    """
+    settings = get_settings()
+    if admin_secret and _secrets.compare_digest(admin_secret, settings.club_admin_secret):
+        return ROLE_RANK["owner"]
+    if access_key and signature and timestamp:
+        user_id = require_signed_auth(db, method, path, access_key, signature, timestamp)
+        user = db.get(User, user_id)
+        if user:
+            return ROLE_RANK.get(user.role, 0)
+    return -1
+
 
 @router.post("/api_keys/generate", response_model=GenerateApiKeyResponse)
 async def generate_api_key(
     body: GenerateApiKeyRequest,
+    request: Request,
     db: Session = Depends(get_db),
     username: Optional[str] = None,  # allow ?username=foo or future body extension
+    role: str = "member",
+    access_key: Optional[str] = Header(None, alias="KALSHI-ACCESS-KEY"),
+    signature: Optional[str] = Header(None, alias="KALSHI-ACCESS-SIGNATURE"),
+    timestamp: Optional[str] = Header(None, alias="KALSHI-ACCESS-TIMESTAMP"),
+    admin_secret: Optional[str] = Header(None, alias="X-Kalshi-Sim-Admin"),
 ):
-    """Generate fresh RSA-2048 keypair for a user.
+    """Generate a fresh RSA-2048 keypair for a user (admin only).
 
     Returns the private PEM **once** (user must save it). We store only the public key + metadata.
-    If username provided (query or future), create/find that User + PaperAccount.
-    Defaults to 'demo_trader' for easy start.
+    Issuing keys requires an admin/owner key or the club admin secret; only owners may mint
+    admin/owner keys. Defaults the new user to the ``member`` role.
     """
     settings = get_settings()
+
+    rank = resolve_admin_rank(
+        db, "POST", request.url.path, access_key, signature, timestamp, admin_secret
+    )
+    if rank < ROLE_RANK["admin"]:
+        raise HTTPException(403, "issuing API keys requires an admin key or the club admin secret")
+    role = role.lower()
+    if role not in VALID_ROLES:
+        raise HTTPException(400, f"invalid role (one of {sorted(VALID_ROLES)})")
+    if ROLE_RANK[role] >= ROLE_RANK["admin"] and rank < ROLE_RANK["owner"]:
+        raise HTTPException(403, "only an owner can grant admin/owner roles")
+
     uname = username or "demo_trader"
     display = f"{uname} (paper)"
 
     user = db.query(User).filter(User.username == uname).first()
     if not user:
-        user = User(username=uname, display_name=display)
+        user = User(username=uname, display_name=display, role=role)
         db.add(user)
         db.commit()
         db.refresh(user)
 
         pa = PaperAccount(user_id=user.id, balance_cents=settings.starting_balance_cents)
         db.add(pa)
+        db.commit()
+    elif ROLE_RANK[role] > ROLE_RANK.get(user.role, 0) and rank >= ROLE_RANK["owner"]:
+        # An owner re-issuing a key can promote an existing member.
+        user.role = role
         db.commit()
 
     # Real RSA keypair

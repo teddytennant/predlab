@@ -11,7 +11,7 @@ All side effects hit PaperAccount, Position, Trade, Order tables + in-memory boo
 
 import logging
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Query
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
 
 from ..db import get_db
 from ..models.api import (
@@ -23,7 +23,7 @@ from ..models.api import (
     GetPositionsResponse,
 )
 from ..services.paper_trading import PaperTradingService, get_paper_service
-from .auth import get_current_user, require_signed_auth
+from .auth import ROLE_RANK, get_current_user, require_signed_auth, resolve_admin_rank
 
 logger = logging.getLogger(__name__)
 
@@ -140,41 +140,52 @@ async def get_fills(
 # --- Also support common legacy GET /portfolio/orders?status=open style (already covered) ---
 
 
-# --- Privileged admin actions (for TUI / club ops / teaching). Protected by CLUB_ADMIN_SECRET header ---
-# Call with:  -H "X-Kalshi-Sim-Admin: $CLUB_ADMIN_SECRET"
+# --- Privileged admin actions (for TUI / club ops / teaching). ---
+# Authorize with either an admin/owner key (signed KALSHI-ACCESS-* headers) or
+# the club admin secret header:  -H "X-Kalshi-Sim-Admin: $CLUB_ADMIN_SECRET"
 
 @router.post("/admin/reset-user")
 async def admin_reset(
+    request: Request,
     username: str = Query(..., description="username to reset"),
     db=Depends(get_db),
+    access_key: str = Header(None, alias="KALSHI-ACCESS-KEY"),
+    signature: str = Header(None, alias="KALSHI-ACCESS-SIGNATURE"),
+    timestamp: str = Header(None, alias="KALSHI-ACCESS-TIMESTAMP"),
     admin_secret: str = Header(None, alias="X-Kalshi-Sim-Admin"),
 ):
-    """Reset a paper account to starting balance, cancel all its orders, zero positions.
-    Used before club meetings etc.
-    """
+    """Reset a paper account to starting balance, cancel its orders, zero positions (admin)."""
+    rank = resolve_admin_rank(
+        db, "POST", request.url.path, access_key, signature, timestamp, admin_secret
+    )
+    if rank < ROLE_RANK["admin"]:
+        raise HTTPException(403, "requires an admin key or the club admin secret")
     svc = get_paper_service(db)
     try:
-        return svc.admin_reset_user(username, admin_secret or "")
-    except PermissionError:
-        raise HTTPException(403, "invalid admin secret")  # noqa: B904
-    except Exception as e:  # noqa: B904
+        return svc.admin_reset_user(username)
+    except Exception as e:
         raise HTTPException(400, str(e))  # noqa: B904
 
 
 @router.post("/admin/resolve/{ticker}")
 async def admin_resolve(
     ticker: str,
+    request: Request,
     result: str = Query(..., pattern="^(yes|no)$"),
     db=Depends(get_db),
+    access_key: str = Header(None, alias="KALSHI-ACCESS-KEY"),
+    signature: str = Header(None, alias="KALSHI-ACCESS-SIGNATURE"),
+    timestamp: str = Header(None, alias="KALSHI-ACCESS-TIMESTAMP"),
     admin_secret: str = Header(None, alias="X-Kalshi-Sim-Admin"),
 ):
-    """Force-settle a market for teaching/demo. All positions paid out into balances.
-    Also cancels open orders on that ticker.
-    """
+    """Force-settle a market (owner only — this decides winners). Pays out and cancels orders."""
+    rank = resolve_admin_rank(
+        db, "POST", request.url.path, access_key, signature, timestamp, admin_secret
+    )
+    if rank < ROLE_RANK["owner"]:
+        raise HTTPException(403, "resolving markets requires the owner role")
     svc = get_paper_service(db)
     try:
-        return svc.admin_force_resolve(ticker, result, admin_secret or "")
-    except PermissionError:
-        raise HTTPException(403, "invalid admin secret")  # noqa: B904
-    except Exception as e:  # noqa: B904
+        return svc.admin_force_resolve(ticker, result)
+    except Exception as e:
         raise HTTPException(400, str(e))  # noqa: B904

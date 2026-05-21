@@ -39,6 +39,11 @@ class User(Base):
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=gen_uuid)
     username: Mapped[str] = mapped_column(String(64), unique=True, index=True, nullable=False)
     display_name: Mapped[Optional[str]] = mapped_column(String(128))
+    # Access role: "member" (own account only), "admin" (issue/revoke keys,
+    # reset balances), or "owner" (everything, incl. resolving markets).
+    role: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="member", server_default="member"
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     paper_account: Mapped["PaperAccount"] = relationship(

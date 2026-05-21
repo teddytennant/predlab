@@ -88,7 +88,7 @@ def test_cancel_resting_order(session, make_user, make_market):
 
 
 def test_admin_force_resolve_yes_pays_winners(
-    session, make_user, make_market, admin_secret, starting_balance
+    session, make_user, make_market, starting_balance
 ):
     maker = make_user(session, "maker")
     taker = make_user(session, "taker")
@@ -97,7 +97,7 @@ def test_admin_force_resolve_yes_pays_winners(
     svc.place_order(maker.id, _order(mkt.ticker, "ask", "0.30", "10", "m1"))
     svc.place_order(taker.id, _order(mkt.ticker, "bid", "0.50", "10", "t1"))
 
-    out = svc.admin_force_resolve(mkt.ticker, "yes", admin_secret)
+    out = svc.admin_force_resolve(mkt.ticker, "yes")
     assert out["result"] == "yes"
     # Taker held +10 yes -> +100c each on a YES resolution.
     assert svc.get_balance(taker.id).balance == (starting_balance - 300) + 1000
@@ -108,8 +108,9 @@ def test_admin_force_resolve_yes_pays_winners(
     )
 
 
-def test_admin_actions_require_correct_secret(session, make_market):
+def test_admin_force_resolve_validates_result(session, make_market):
+    # Authorization now lives at the route layer; the service still validates input.
     mkt = make_market(session)
     svc = PaperTradingService(session)
-    with pytest.raises(PermissionError):
-        svc.admin_force_resolve(mkt.ticker, "yes", "wrong-secret")
+    with pytest.raises(ValueError):
+        svc.admin_force_resolve(mkt.ticker, "maybe")

@@ -427,9 +427,8 @@ class PaperTradingService:
 
     # --- Admin / settlement ---
 
-    def admin_reset_user(self, username: str, admin_secret: str) -> dict:
-        if admin_secret != self.settings.club_admin_secret:
-            raise PermissionError("bad admin secret")
+    def admin_reset_user(self, username: str) -> dict:
+        # Authorization is enforced at the route layer (admin role / club secret).
         user = self.db.query(User).filter(User.username == username).first()
         if not user:
             return {"reset": False, "reason": "no such user"}
@@ -455,9 +454,8 @@ class PaperTradingService:
         rebuild_books_from_db(self.db)
         return {"reset": True, "user": username, "new_balance_cents": pa.balance_cents}
 
-    def admin_force_resolve(self, ticker: str, result: str, admin_secret: str) -> dict:
-        if admin_secret != self.settings.club_admin_secret:
-            raise PermissionError("bad admin secret")
+    def admin_force_resolve(self, ticker: str, result: str) -> dict:
+        # Authorization is enforced at the route layer (owner role / club secret).
         if result not in ("yes", "no"):
             raise ValueError("result must be yes or no")
 
