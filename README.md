@@ -41,7 +41,10 @@ club's hosted servers:
 | Polymarket | `https://poly.teddytennant.com`   | Gamma + CLOB (`/markets`, `/order`) |
 | Kalshi     | `https://kalshi.teddytennant.com` | Trade API v2 (`/trade-api/v2/...`)  |
 
-Point the official Polymarket / Kalshi SDKs (or plain `curl`) at those base URLs and trade.
+**Easiest path — the starter kit:** grab [`examples/predlab.py`](examples/predlab.py), a tiny
+Python client that handles both platforms (including Kalshi's request signing) so you can
+trade in a few lines. See [`examples/README.md`](examples/README.md). Prefer to roll your own?
+Point the official SDKs or plain `curl` at the base URLs — the per-platform steps are below.
 
 **What needs your key:**
 
