@@ -12,9 +12,9 @@ dependencies = [
     "pydantic>=2.9.0",
     "pydantic-settings>=2.5.0",
     "sqlalchemy>=2.0.0",
+    "psycopg2-binary>=2.9.9",  # Postgres driver for the docker-compose path
     "httpx>=0.27.0",
     "python-dotenv>=1.0.0",
-    "aiosqlite>=0.20.0",  # for async sqlite in dev
 ]
 
 [project.optional-dependencies]

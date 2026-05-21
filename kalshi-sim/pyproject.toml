@@ -14,6 +14,7 @@ dependencies = [
     "pydantic>=2.10.0",
     "pydantic-settings>=2.6.0",
     "sqlalchemy>=2.0.36",
+    "psycopg2-binary>=2.9.9",  # Postgres driver for the docker-compose path
     "httpx>=0.28.0",
     "cryptography>=44.0.0",
     "python-dotenv>=1.0.0",
