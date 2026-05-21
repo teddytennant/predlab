@@ -84,14 +84,30 @@ Point the official Polymarket / Kalshi SDKs at these base URLs (or `http://local
 - **Requires a key** — anything that touches an account: placing/cancelling orders,
   positions, balances. Unauthenticated calls get `401`.
 
+### Roles
+
+Every user has a role. Key issuance is gated on **both** sims — students cannot self-serve.
+
+| Role     | Can do                                                            |
+|----------|-------------------------------------------------------------------|
+| `member` | Trade & view **their own** account only (the default).            |
+| `admin`  | Issue/revoke member keys, reset balances. (e.g. the VP.)          |
+| `owner`  | Everything, incl. force-resolving markets and granting roles.     |
+
+The **master secret** (`ADMIN_SECRET` for Polymarket, `CLUB_ADMIN_SECRET` for Kalshi)
+authenticates as `owner` — that's your bootstrap/break-glass. An admin/owner can also act
+with their **own** key, so you can hand the VP an admin key instead of the master secret.
+Only an owner may mint `admin`/`owner` keys. The `predlab` TUI has a role picker (↑/↓).
+
 ### Polymarket (simple header key)
 
-1. **Get a key** (club admin only — gated by `X-Admin-Secret`):
+1. **Get a key** (admin only — an admin key in `POLY_API_KEY`, or the owner `X-Admin-Secret`).
+   Add `&role=admin` to mint an admin key (owner only):
 
    ```bash
-   curl -X POST "https://poly.teddytennant.com/admin/create-paper-key?username=alice" \
+   curl -X POST "https://poly.teddytennant.com/admin/create-paper-key?username=alice&role=member" \
      -H "X-Admin-Secret: $PREDLAB_ADMIN_SECRET"
-   # -> {"username":"alice","api_key":"...","secret":"...","note":"Use api_key in POLY_API_KEY header."}
+   # -> {"username":"alice","role":"member","api_key":"...","secret":"...","note":"Use api_key in POLY_API_KEY header."}
    ```
 
    (Admins normally do this from the `predlab` TUI, which mints keys on both platforms at once.)
@@ -117,10 +133,12 @@ Point the official Polymarket / Kalshi SDKs at these base URLs (or `http://local
 Kalshi mirrors the real API's signed-request auth, so use the **official Kalshi Python SDK**
 pointed at the base URL rather than raw curl.
 
-1. **Generate a keypair** — returns the RSA **private key once** (save it) plus a key id:
+1. **Generate a keypair** (admin only) — returns the RSA **private key once** (save it) plus a
+   key id. Authorize with the owner `X-Kalshi-Sim-Admin` secret (or an admin's signed request):
 
    ```bash
-   curl -X POST "https://kalshi.teddytennant.com/trade-api/v2/api_keys/generate?username=alice" \
+   curl -X POST "https://kalshi.teddytennant.com/trade-api/v2/api_keys/generate?username=alice&role=member" \
+     -H "X-Kalshi-Sim-Admin: $CLUB_ADMIN_SECRET" \
      -H "Content-Type: application/json" -d '{"name":"alice-laptop","scopes":["trade"]}'
    # -> {"api_key_id":"ks_live_...","private_key":"-----BEGIN RSA PRIVATE KEY----- ..."}
    ```
@@ -173,11 +191,10 @@ docker compose up -d --build
 Update a running deployment with `git pull --ff-only && docker compose up -d --build`
 (the Postgres volume persists paper balances across rebuilds).
 
-**Access model / known gaps:**
-- **Polymarket** key issuance is admin-only (`X-Admin-Secret`), so only people you hand a
-  key to can trade.
-- **Kalshi** `/api_keys/generate` is currently **open** — anyone who can reach the URL can
-  self-mint a key and trade. Fine for an open club; gate it behind the admin secret if you
-  want Kalshi to be invite-only too.
+**Access model:**
+- Key issuance is **admin-gated on both sims** (see [Roles](#roles)) — students can't
+  self-serve; only people you (or an admin) issue a key to can trade, and only an owner can
+  mint admin/owner keys.
+- Members are scoped to their own account on every endpoint.
 - CORS is `allow_origins=["*"]`. Harmless for SDK/script clients; tighten if you add a
   browser frontend on a specific origin.
