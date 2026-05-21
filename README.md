@@ -56,13 +56,18 @@ make install-admin     # cargo install --path ratatui-admin  -> `predlab` on you
 predlab                # or: make admin
 ```
 
-The TUI has two views (`Tab` to switch):
-- **Issue keys** — type a username, `Enter` mints paper keys on *both* simulators and saves
-  the member to the roster.
-- **Roster** — the club's students from `~/.predlab/students.db`.
+The TUI has three tabs (`Tab` to cycle):
+- **Issue keys** — type a username, pick a role with `←/→`, `Enter` mints paper keys on
+  *both* simulators, saves the member to the roster, copies a credentials block to your
+  clipboard, and writes the Kalshi private key to `~/.predlab/keys/<username>.pem`.
+- **Roster** — the club's students from `~/.predlab/students.db` (`↑/↓` to select, `c` to
+  re-copy a member's credentials).
+- **Leaderboard** — every member ranked by **combined paper net worth** across both sims
+  (live; `r` refreshes).
 
-Configure endpoints/secret via env vars: `POLY_URL`, `KALSHI_URL`, `PREDLAB_ADMIN_SECRET`
-(the Polymarket admin endpoint is gated by `X-Admin-Secret`).
+Configure endpoints/secrets via env vars: `POLY_URL`, `KALSHI_URL`, `PREDLAB_ADMIN_SECRET`
+(Polymarket admin, `X-Admin-Secret`), and `PREDLAB_KALSHI_SECRET` (Kalshi admin,
+`X-Kalshi-Sim-Admin`; falls back to `CLUB_ADMIN_SECRET`).
 
 ## Using the API
 
@@ -97,7 +102,12 @@ Every user has a role. Key issuance is gated on **both** sims — students canno
 The **master secret** (`ADMIN_SECRET` for Polymarket, `CLUB_ADMIN_SECRET` for Kalshi)
 authenticates as `owner` — that's your bootstrap/break-glass. An admin/owner can also act
 with their **own** key, so you can hand the VP an admin key instead of the master secret.
-Only an owner may mint `admin`/`owner` keys. The `predlab` TUI has a role picker (↑/↓).
+Only an owner may mint `admin`/`owner` keys. The `predlab` TUI has a role picker (←/→).
+
+**Standings** — `GET /admin/leaderboard` (Polymarket) and `GET /trade-api/v2/admin/leaderboard`
+(Kalshi) return every member ranked by paper net worth (cash + open positions marked to the
+current price). Both are admin-gated. The TUI's **Leaderboard** tab merges them into a single
+combined ranking.
 
 ### Polymarket (simple header key)
 
