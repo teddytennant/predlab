@@ -5,10 +5,15 @@
 //!   simulators and persist the member to the shared roster.
 //! - **Roster**: the club's students (from `~/.predlab/students.db`).
 //!
+//! Pick a role with ↑/↓ before issuing (member/admin/owner) — granting
+//! admin/owner requires an owner-level secret on the servers.
+//!
 //! Endpoints / secrets are read from the environment so this works against
 //! local sims or a deployed instance:
 //!   POLY_URL (default http://localhost:8001), KALSHI_URL (default :8002),
-//!   PREDLAB_ADMIN_SECRET (X-Admin-Secret for the Polymarket admin endpoint).
+//!   PREDLAB_ADMIN_SECRET  (X-Admin-Secret for the Polymarket admin endpoint),
+//!   PREDLAB_KALSHI_SECRET (X-Kalshi-Sim-Admin for the Kalshi generate endpoint;
+//!                          falls back to CLUB_ADMIN_SECRET).
 
 use std::io;
 
@@ -40,6 +45,16 @@ fn admin_secret() -> String {
         .or_else(|_| std::env::var("ADMIN_SECRET"))
         .unwrap_or_default()
 }
+/// Kalshi's master secret (separate from Polymarket's). Issuing Kalshi keys now
+/// requires it. Falls back to CLUB_ADMIN_SECRET.
+fn kalshi_admin_secret() -> String {
+    std::env::var("PREDLAB_KALSHI_SECRET")
+        .or_else(|_| std::env::var("CLUB_ADMIN_SECRET"))
+        .unwrap_or_default()
+}
+
+/// Roles the owner can grant, lowest → highest. Cycled with ↑/↓ in the Issue view.
+const ROLES: [&str; 3] = ["member", "admin", "owner"];
 
 #[derive(PartialEq, Eq, Clone, Copy)]
 enum View {
@@ -50,6 +65,7 @@ enum View {
 struct App {
     view: View,
     username: String,
+    role_idx: usize,
     message: String,
     students: Vec<Student>,
     should_quit: bool,
@@ -60,10 +76,15 @@ impl App {
         Self {
             view: View::Issue,
             username: String::new(),
-            message: "Type a username, Enter = issue dual keys, Tab = roster, q = quit".into(),
+            role_idx: 0,
+            message: "Type a username · ↑/↓ role · Enter issue · Tab roster · q quit".into(),
             students,
             should_quit: false,
         }
+    }
+
+    fn role(&self) -> &'static str {
+        ROLES[self.role_idx]
     }
 }
 
@@ -117,6 +138,12 @@ fn run_app<B: ratatui::backend::Backend>(
                     KeyCode::Enter if app.view == View::Issue => {
                         issue_and_save(app, rt, conn);
                     }
+                    KeyCode::Up if app.view == View::Issue => {
+                        app.role_idx = (app.role_idx + 1) % ROLES.len();
+                    }
+                    KeyCode::Down if app.view == View::Issue => {
+                        app.role_idx = (app.role_idx + ROLES.len() - 1) % ROLES.len();
+                    }
                     KeyCode::Char(c)
                         if app.view == View::Issue && (c.is_ascii_alphanumeric() || c == '_') =>
                     {
@@ -143,22 +170,25 @@ fn issue_and_save(app: &mut App, rt: &Runtime, conn: &Connection) {
         app.message = "Enter a username first".into();
         return;
     }
-    app.message = format!("Issuing dual keys for '{username}'...");
-    match rt.block_on(issue_both(&username)) {
+    let role = app.role().to_string();
+    app.message = format!("Issuing {role} keys for '{username}'...");
+    match rt.block_on(issue_both(&username, &role)) {
         Ok((poly_key, kalshi_key)) => {
             let student = Student {
                 username: username.clone(),
                 display_name: username.clone(),
                 poly_key: poly_key.clone(),
                 kalshi_key: kalshi_key.clone(),
+                role: role.clone(),
                 created_at: chrono::Utc::now().to_rfc3339(),
             };
             match registry::save_student(conn, &student) {
                 Ok(()) => {
                     app.students = registry::list_students(conn).unwrap_or_default();
                     app.username.clear();
-                    app.message =
-                        format!("✅ {username}: poly={poly_key}  kalshi={kalshi_key} (saved)");
+                    app.message = format!(
+                        "✅ {username} [{role}]: poly={poly_key}  kalshi={kalshi_key} (saved)"
+                    );
                 }
                 Err(e) => app.message = format!("Issued but failed to save roster: {e}"),
             }
@@ -167,15 +197,19 @@ fn issue_and_save(app: &mut App, rt: &Runtime, conn: &Connection) {
     }
 }
 
-/// Mint a paper key on each simulator. Returns (polymarket_key, kalshi_key_id).
-async fn issue_both(username: &str) -> Result<(String, String)> {
+/// Mint a paper key with role `role` on each simulator. Returns (polymarket_key, kalshi_key_id).
+async fn issue_both(username: &str, role: &str) -> Result<(String, String)> {
     let client = reqwest::Client::new();
 
-    // Polymarket: admin endpoint, gated by X-Admin-Secret.
+    // Polymarket: admin endpoint, gated by X-Admin-Secret (master secret = owner).
     let poly_resp = client
         .post(format!("{}/admin/create-paper-key", poly_url()))
         .header("X-Admin-Secret", admin_secret())
-        .query(&[("username", username), ("display_name", username)])
+        .query(&[
+            ("username", username),
+            ("display_name", username),
+            ("role", role),
+        ])
         .send()
         .await
         .context("calling polymarket admin/create-paper-key")?;
@@ -186,10 +220,11 @@ async fn issue_both(username: &str) -> Result<(String, String)> {
         .map(str::to_string)
         .context("polymarket response missing api_key (check PREDLAB_ADMIN_SECRET)")?;
 
-    // Kalshi: generate endpoint returns an RSA keypair; we record the key id.
+    // Kalshi: generate endpoint (now admin-gated) returns an RSA keypair; record the key id.
     let kalshi_resp = client
         .post(format!("{}/trade-api/v2/api_keys/generate", kalshi_url()))
-        .query(&[("username", username)])
+        .header("X-Kalshi-Sim-Admin", kalshi_admin_secret())
+        .query(&[("username", username), ("role", role)])
         .json(&serde_json::json!({ "name": username }))
         .send()
         .await
@@ -200,7 +235,7 @@ async fn issue_both(username: &str) -> Result<(String, String)> {
         .get("api_key_id")
         .and_then(|v| v.as_str())
         .map(str::to_string)
-        .context("kalshi response missing api_key_id")?;
+        .context("kalshi response missing api_key_id (check PREDLAB_KALSHI_SECRET / role)")?;
 
     Ok((poly_key, kalshi_key))
 }
@@ -232,8 +267,9 @@ fn ui(f: &mut Frame, app: &App) {
     match app.view {
         View::Issue => {
             let body = Paragraph::new(format!(
-                "Username:  {}\n\nPress ENTER to create the member and mint paper keys on both\nsimulators (Polymarket + Kalshi). The keys are saved to the roster.",
-                app.username
+                "Username:  {}\nRole:      {}   (↑/↓ to change)\n\nPress ENTER to create the user and mint paper keys on both simulators\n(Polymarket + Kalshi). Granting admin/owner needs an OWNER secret.",
+                app.username,
+                app.role(),
             ))
             .block(
                 Block::default()
@@ -243,7 +279,7 @@ fn ui(f: &mut Frame, app: &App) {
             f.render_widget(body, chunks[1]);
         }
         View::Roster => {
-            let header = Row::new(["USERNAME", "POLY KEY", "KALSHI KEY", "CREATED"])
+            let header = Row::new(["USERNAME", "ROLE", "POLY KEY", "KALSHI KEY", "CREATED"])
                 .style(Style::default().fg(Color::Green).add_modifier(Modifier::BOLD));
             let rows: Vec<Row> = app
                 .students
@@ -251,17 +287,19 @@ fn ui(f: &mut Frame, app: &App) {
                 .map(|s| {
                     Row::new(vec![
                         Cell::from(s.username.clone()),
-                        Cell::from(truncate(&s.poly_key, 18)),
-                        Cell::from(truncate(&s.kalshi_key, 18)),
+                        Cell::from(s.role.clone()),
+                        Cell::from(truncate(&s.poly_key, 16)),
+                        Cell::from(truncate(&s.kalshi_key, 16)),
                         Cell::from(truncate(&s.created_at, 19)),
                     ])
                 })
                 .collect();
             let widths = [
+                Constraint::Percentage(22),
+                Constraint::Percentage(12),
                 Constraint::Percentage(25),
-                Constraint::Percentage(28),
-                Constraint::Percentage(28),
-                Constraint::Percentage(19),
+                Constraint::Percentage(25),
+                Constraint::Percentage(16),
             ];
             let table = Table::new(rows, widths).header(header).block(
                 Block::default()

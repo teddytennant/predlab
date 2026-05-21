@@ -25,6 +25,8 @@ pub struct Student {
     pub display_name: String,
     pub poly_key: String,
     pub kalshi_key: String,
+    /// Access role granted on both sims: "member", "admin", or "owner".
+    pub role: String,
     pub created_at: String,
 }
 
@@ -58,10 +60,17 @@ fn init_schema(conn: &Connection) -> Result<()> {
             display_name TEXT,
             poly_key     TEXT,
             kalshi_key   TEXT,
+            role         TEXT NOT NULL DEFAULT 'member',
             created_at   TEXT
         )",
         [],
     )?;
+    // Migrate rosters created before roles existed. Errors (duplicate column on
+    // a fresh DB that already has it) are expected and ignored.
+    let _ = conn.execute(
+        "ALTER TABLE students ADD COLUMN role TEXT NOT NULL DEFAULT 'member'",
+        [],
+    );
     Ok(())
 }
 
@@ -70,9 +79,16 @@ fn init_schema(conn: &Connection) -> Result<()> {
 pub fn save_student(conn: &Connection, s: &Student) -> Result<()> {
     conn.execute(
         "INSERT OR REPLACE INTO students
-            (username, display_name, poly_key, kalshi_key, created_at)
-         VALUES (?1, ?2, ?3, ?4, ?5)",
-        params![s.username, s.display_name, s.poly_key, s.kalshi_key, s.created_at],
+            (username, display_name, poly_key, kalshi_key, role, created_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+        params![
+            s.username,
+            s.display_name,
+            s.poly_key,
+            s.kalshi_key,
+            s.role,
+            s.created_at
+        ],
     )?;
     Ok(())
 }
@@ -80,7 +96,7 @@ pub fn save_student(conn: &Connection, s: &Student) -> Result<()> {
 /// All students, newest first (then alphabetical) for stable display.
 pub fn list_students(conn: &Connection) -> Result<Vec<Student>> {
     let mut stmt = conn.prepare(
-        "SELECT username, display_name, poly_key, kalshi_key, created_at
+        "SELECT username, display_name, poly_key, kalshi_key, role, created_at
          FROM students
          ORDER BY created_at DESC, username ASC",
     )?;
@@ -90,7 +106,10 @@ pub fn list_students(conn: &Connection) -> Result<Vec<Student>> {
             display_name: row.get::<_, Option<String>>(1)?.unwrap_or_default(),
             poly_key: row.get::<_, Option<String>>(2)?.unwrap_or_default(),
             kalshi_key: row.get::<_, Option<String>>(3)?.unwrap_or_default(),
-            created_at: row.get::<_, Option<String>>(4)?.unwrap_or_default(),
+            role: row
+                .get::<_, Option<String>>(4)?
+                .unwrap_or_else(|| "member".to_string()),
+            created_at: row.get::<_, Option<String>>(5)?.unwrap_or_default(),
         })
     })?;
     Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
@@ -106,8 +125,18 @@ mod tests {
             display_name: format!("{name} display"),
             poly_key: format!("pm_paper_{name}"),
             kalshi_key: format!("ks_live_{name}"),
+            role: "member".to_string(),
             created_at: "2026-05-20T10:00:00".to_string(),
         }
+    }
+
+    #[test]
+    fn save_persists_role() {
+        let conn = open_in_memory().unwrap();
+        let mut vp = student("vp");
+        vp.role = "admin".to_string();
+        save_student(&conn, &vp).unwrap();
+        assert_eq!(list_students(&conn).unwrap()[0].role, "admin");
     }
 
     #[test]
