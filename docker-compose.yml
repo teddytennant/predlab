@@ -28,6 +28,8 @@ services:
     environment:
       - PORT=8001
       - DATABASE_URL=postgresql+psycopg2://predlab:predlab@postgres:5432/polymarket
+      - ENVIRONMENT=${ENVIRONMENT:-production}
+      - ADMIN_SECRET=${ADMIN_SECRET:-change-me-set-in-dotenv}
     depends_on:
       postgres:
         condition: service_healthy
@@ -47,6 +49,9 @@ services:
     environment:
       - PORT=8002
       - DATABASE_URL=postgresql+psycopg2://predlab:predlab@postgres:5432/kalshi
+      - ENVIRONMENT=${ENVIRONMENT:-production}
+      - CLUB_ADMIN_SECRET=${CLUB_ADMIN_SECRET:-change-me-set-in-dotenv}
+      - DEV_BYPASS_AUTH=${DEV_BYPASS_AUTH:-false}
     depends_on:
       postgres:
         condition: service_healthy
