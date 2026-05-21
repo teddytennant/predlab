@@ -276,7 +276,9 @@ body {
 pre {
   margin: 0;
   font-family: "DejaVu Sans Mono", "SFMono-Regular", ui-monospace, Menlo, Consolas, monospace;
-  font-size: 14px; line-height: 1.45;
+  font-size: 14px;
+  /* line-height: 1 so the box-drawing chars touch and form continuous lines */
+  line-height: 1;
   color: #f0f0f0;
   white-space: pre;
 }
