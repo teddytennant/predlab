@@ -189,3 +189,21 @@ async def admin_resolve(
         return svc.admin_force_resolve(ticker, result)
     except Exception as e:
         raise HTTPException(400, str(e))  # noqa: B904
+
+
+@router.get("/admin/leaderboard")
+async def admin_leaderboard(
+    request: Request,
+    db=Depends(get_db),
+    access_key: str = Header(None, alias="KALSHI-ACCESS-KEY"),
+    signature: str = Header(None, alias="KALSHI-ACCESS-SIGNATURE"),
+    timestamp: str = Header(None, alias="KALSHI-ACCESS-TIMESTAMP"),
+    admin_secret: str = Header(None, alias="X-Kalshi-Sim-Admin"),
+):
+    """Club standings: every user ranked by paper net worth in dollars (admin)."""
+    rank = resolve_admin_rank(
+        db, "GET", request.url.path, access_key, signature, timestamp, admin_secret
+    )
+    if rank < ROLE_RANK["admin"]:
+        raise HTTPException(403, "requires an admin key or the club admin secret")
+    return get_paper_service(db).leaderboard()

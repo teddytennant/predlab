@@ -55,6 +55,7 @@ from .services.orderbook import OrderBookEntry, get_orderbook
 from .services.paper_trading import (
     cancel_paper_order,
     force_resolve_market,
+    leaderboard,
     list_user_open_orders,
     list_user_positions_with_pnl,
     place_paper_order,
@@ -667,6 +668,14 @@ def create_app() -> FastAPI:
     ) -> dict[str, Any]:
         """Force settlement for a market (owner only — this decides winners)."""
         return force_resolve_market(session, market_id, resolution)
+
+    @app.get("/admin/leaderboard", tags=["admin"])
+    async def admin_leaderboard(
+        _: Principal = Depends(require_role("admin")),
+        session: Session = Depends(get_session),
+    ) -> list[dict[str, Any]]:
+        """Club standings: every user ranked by paper net worth (admin only)."""
+        return leaderboard(session)
 
     # Legacy stub kept for Phase 1 scripts
     @app.post("/orders", response_model=OrderOut, status_code=201, tags=["trading", "legacy"])

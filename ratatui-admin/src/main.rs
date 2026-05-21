@@ -8,8 +8,10 @@
 //!   `~/.predlab/keys/<username>.pem` so the member can actually sign requests.
 //! - **Roster** — browse club members (↑/↓); press `c` to copy a member's
 //!   credentials block to the clipboard.
+//! - **Leaderboard** — every member ranked by combined paper net worth across
+//!   both sims (live; press `r` to refresh).
 //!
-//! Quit with `Esc` (or `q` from the roster). Endpoints/secrets come from the
+//! Quit with `Esc` (or `q` from the roster/leaderboard). Endpoints/secrets come from the
 //! environment so this works against local sims or a deployed instance:
 //!   POLY_URL (default http://localhost:8001), KALSHI_URL (default :8002),
 //!   PREDLAB_ADMIN_SECRET  (X-Admin-Secret for the Polymarket admin endpoint),
@@ -83,6 +85,16 @@ struct Issued {
 enum View {
     Issue,
     Roster,
+    Leaderboard,
+}
+
+/// One row of the combined leaderboard: a member's net worth on each sim.
+#[derive(Clone, Default)]
+struct Leader {
+    username: String,
+    poly: f64,
+    kalshi: f64,
+    total: f64,
 }
 
 struct App {
@@ -93,6 +105,7 @@ struct App {
     students: Vec<Student>,
     roster_sel: usize,
     last: Option<Issued>,
+    leaders: Vec<Leader>,
     should_quit: bool,
 }
 
@@ -106,6 +119,7 @@ impl App {
             students,
             roster_sel: 0,
             last: None,
+            leaders: Vec::new(),
             should_quit: false,
         }
     }
@@ -167,9 +181,13 @@ fn run_app<B: ratatui::backend::Backend>(
                     KeyCode::Tab => {
                         app.view = match app.view {
                             View::Issue => View::Roster,
-                            View::Roster => View::Issue,
+                            View::Roster => View::Leaderboard,
+                            View::Leaderboard => View::Issue,
                         };
                         clamp_selection(app);
+                        if app.view == View::Leaderboard {
+                            refresh_leaderboard(app, rt);
+                        }
                         continue;
                     }
                     _ => {}
@@ -178,6 +196,7 @@ fn run_app<B: ratatui::backend::Backend>(
                 match app.view {
                     View::Issue => handle_issue_key(app, rt, conn, key.code),
                     View::Roster => handle_roster_key(app, key.code),
+                    View::Leaderboard => handle_leaderboard_key(app, rt, key.code),
                 }
             }
         }
@@ -247,6 +266,84 @@ fn copy_selected_member(app: &mut App) {
     } else {
         format!("Couldn't reach wl-copy — credentials for {} not copied.", s.username)
     };
+}
+
+fn handle_leaderboard_key(app: &mut App, rt: &Runtime, code: KeyCode) {
+    match code {
+        KeyCode::Char('q') => app.should_quit = true,
+        KeyCode::Char('r') => refresh_leaderboard(app, rt),
+        _ => {}
+    }
+}
+
+fn refresh_leaderboard(app: &mut App, rt: &Runtime) {
+    app.message = "Loading leaderboard…".into();
+    match rt.block_on(fetch_leaderboard()) {
+        Ok(rows) => {
+            app.message = format!(
+                "{} members ranked by combined net worth. Press r to refresh.",
+                rows.len()
+            );
+            app.leaders = rows;
+        }
+        Err(e) => app.message = format!("❌ {e}"),
+    }
+}
+
+/// Fetch both sims' per-user net worth and merge into a combined ranking.
+async fn fetch_leaderboard() -> Result<Vec<Leader>> {
+    use std::collections::BTreeMap;
+
+    let client = reqwest::Client::new();
+    let net = |v: &serde_json::Value| v.get("net_worth").and_then(|n| n.as_f64()).unwrap_or(0.0);
+
+    let poly: Vec<serde_json::Value> = client
+        .get(format!("{}/admin/leaderboard", poly_url()))
+        .header("X-Admin-Secret", admin_secret())
+        .send()
+        .await
+        .context("calling polymarket /admin/leaderboard")?
+        .error_for_status()
+        .context("polymarket leaderboard rejected (check PREDLAB_ADMIN_SECRET)")?
+        .json()
+        .await
+        .context("parsing polymarket leaderboard")?;
+
+    let kalshi: Vec<serde_json::Value> = client
+        .get(format!("{}/trade-api/v2/admin/leaderboard", kalshi_url()))
+        .header("X-Kalshi-Sim-Admin", kalshi_admin_secret())
+        .send()
+        .await
+        .context("calling kalshi /admin/leaderboard")?
+        .error_for_status()
+        .context("kalshi leaderboard rejected (check PREDLAB_KALSHI_SECRET)")?
+        .json()
+        .await
+        .context("parsing kalshi leaderboard")?;
+
+    // Merge by username; a member may exist on one sim only.
+    let mut by_user: BTreeMap<String, Leader> = BTreeMap::new();
+    for e in &poly {
+        if let Some(u) = e.get("username").and_then(|v| v.as_str()) {
+            by_user.entry(u.to_string()).or_default().poly = net(e);
+        }
+    }
+    for e in &kalshi {
+        if let Some(u) = e.get("username").and_then(|v| v.as_str()) {
+            by_user.entry(u.to_string()).or_default().kalshi = net(e);
+        }
+    }
+
+    let mut rows: Vec<Leader> = by_user
+        .into_iter()
+        .map(|(username, mut l)| {
+            l.username = username;
+            l.total = l.poly + l.kalshi;
+            l
+        })
+        .collect();
+    rows.sort_by(|a, b| b.total.partial_cmp(&a.total).unwrap_or(std::cmp::Ordering::Equal));
+    Ok(rows)
 }
 
 fn issue_and_save(app: &mut App, rt: &Runtime, conn: &Connection) {
@@ -435,8 +532,9 @@ fn ui(f: &mut Frame, app: &App) {
     let tab_index = match app.view {
         View::Issue => 0,
         View::Roster => 1,
+        View::Leaderboard => 2,
     };
-    let tabs = Tabs::new(vec!["ISSUE KEYS", "ROSTER"])
+    let tabs = Tabs::new(vec!["ISSUE KEYS", "ROSTER", "LEADERBOARD"])
         .block(Block::default().borders(Borders::ALL).title("PREDLAB ADMIN"))
         .select(tab_index)
         .highlight_style(
@@ -449,6 +547,7 @@ fn ui(f: &mut Frame, app: &App) {
     match app.view {
         View::Issue => render_issue(f, app, chunks[1]),
         View::Roster => render_roster(f, app, chunks[1]),
+        View::Leaderboard => render_leaderboard(f, app, chunks[1]),
     }
 
     render_footer(f, app, chunks[2]);
@@ -577,10 +676,76 @@ fn render_roster(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
     f.render_stateful_widget(table, area, &mut state);
 }
 
+fn render_leaderboard(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
+    let header = Row::new(["#", "MEMBER", "POLYMARKET", "KALSHI", "TOTAL"]).style(
+        Style::default()
+            .fg(Color::Green)
+            .add_modifier(Modifier::BOLD),
+    );
+    let rows: Vec<Row> = app
+        .leaders
+        .iter()
+        .enumerate()
+        .map(|(i, l)| {
+            // Highlight the leader.
+            let style = if i == 0 {
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default()
+            };
+            Row::new(vec![
+                Cell::from(format!("{}", i + 1)),
+                Cell::from(l.username.clone()),
+                Cell::from(fmt_money(l.poly)),
+                Cell::from(fmt_money(l.kalshi)),
+                Cell::from(fmt_money(l.total)),
+            ])
+            .style(style)
+        })
+        .collect();
+    let widths = [
+        Constraint::Length(4),
+        Constraint::Percentage(28),
+        Constraint::Percentage(23),
+        Constraint::Percentage(23),
+        Constraint::Percentage(23),
+    ];
+    let title = if app.leaders.is_empty() {
+        "Leaderboard — press r to load".to_string()
+    } else {
+        format!("Leaderboard — combined net worth ({} members)", app.leaders.len())
+    };
+    let table = Table::new(rows, widths)
+        .header(header)
+        .block(Block::default().title(title).borders(Borders::ALL));
+    f.render_widget(table, area);
+}
+
+/// Format a dollar amount with thousands separators, e.g. 25431.5 -> "$25,431.50".
+fn fmt_money(v: f64) -> String {
+    let neg = v < 0.0;
+    let cents = (v.abs() * 100.0).round() as u64;
+    let whole = cents / 100;
+    let frac = cents % 100;
+    let digits = whole.to_string();
+    let bytes = digits.as_bytes();
+    let mut grouped = String::new();
+    for (i, b) in bytes.iter().enumerate() {
+        if i > 0 && (bytes.len() - i).is_multiple_of(3) {
+            grouped.push(',');
+        }
+        grouped.push(*b as char);
+    }
+    format!("{}${}.{:02}", if neg { "-" } else { "" }, grouped, frac)
+}
+
 fn render_footer(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
     let help = match app.view {
-        View::Issue => "Tab roster · ←/→ role · Enter issue · Esc quit",
-        View::Roster => "Tab issue · ↑/↓ select · c copy creds · q/Esc quit",
+        View::Issue => "Tab next · ←/→ role · Enter issue · Esc quit",
+        View::Roster => "Tab next · ↑/↓ select · c copy creds · q/Esc quit",
+        View::Leaderboard => "Tab next · r refresh · q/Esc quit",
     };
     let footer = Paragraph::new(vec![
         Line::from(Span::styled(

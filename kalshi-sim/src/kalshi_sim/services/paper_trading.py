@@ -119,6 +119,30 @@ class PaperTradingService:
             updated_ts=ts,
         )
 
+    def compute_net_worth(self, user_id: str) -> dict:
+        """Total paper net worth in dollars = cash + positions marked to last price."""
+        pa = self._get_or_create_paper_account(user_id)
+        positions = self.db.query(Position).filter(Position.user_id == user_id).all()
+        pos_value_cents = 0
+        for p in positions:
+            m = self.db.get(Market, p.ticker)
+            last = Decimal(m.last_price_dollars) if m else Decimal("0.5")
+            pos_value_cents += int(Decimal(p.yes_contracts) * last * Decimal("100"))
+        return {
+            "cash": round(pa.balance_cents / 100, 2),
+            "positions_value": round(pos_value_cents / 100, 2),
+            "net_worth": round((pa.balance_cents + pos_value_cents) / 100, 2),
+        }
+
+    def leaderboard(self) -> list[dict]:
+        """All users ranked by paper net worth (dollars), highest first."""
+        rows = [
+            {"username": u.username, "role": u.role, **self.compute_net_worth(u.id)}
+            for u in self.db.query(User).all()
+        ]
+        rows.sort(key=lambda r: r["net_worth"], reverse=True)
+        return rows
+
     def get_positions(self, user_id: str) -> GetPositionsResponse:
         positions = self.db.query(Position).filter(Position.user_id == user_id).all()
         mp = []

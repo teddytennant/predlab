@@ -410,6 +410,31 @@ def list_user_positions_with_pnl(db: Session, user: User) -> list[dict[str, Any]
 
 
 # ---------------------------------------------------------------------------
+# Leaderboard / net worth
+# ---------------------------------------------------------------------------
+
+
+def compute_net_worth(db: Session, user: User) -> dict[str, float]:
+    """Total paper net worth = free cash + open positions marked to current price."""
+    cash = float(ensure_paper_account(db, user).balance_usd)
+    positions = db.execute(select(Position).where(Position.user_id == user.id)).scalars().all()
+    pos_value = sum(float(p.size) * _current_price_for_token(db, p.clob_token_id) for p in positions)
+    return {
+        "cash": round(cash, 2),
+        "positions_value": round(pos_value, 2),
+        "net_worth": round(cash + pos_value, 2),
+    }
+
+
+def leaderboard(db: Session) -> list[dict[str, Any]]:
+    """All users ranked by paper net worth, highest first."""
+    users = db.execute(select(User)).scalars().all()
+    rows = [{"username": u.username, "role": u.role, **compute_net_worth(db, u)} for u in users]
+    rows.sort(key=lambda r: r["net_worth"], reverse=True)
+    return rows
+
+
+# ---------------------------------------------------------------------------
 # Resolution / Settlement (simple)
 # ---------------------------------------------------------------------------
 
