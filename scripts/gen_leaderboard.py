@@ -104,18 +104,24 @@ def main() -> int:
         content = f.read()
 
     pattern = re.compile(re.escape(START) + r".*?" + re.escape(END), re.DOTALL)
-    if not pattern.search(content):
+    match = pattern.search(content)
+    if not match:
         print(f"error: leaderboard markers not found in {path}", file=sys.stderr)
         return 1
 
-    # lambda replacement avoids re interpreting backslashes/group refs in the block.
-    updated = pattern.sub(lambda _m: block, content)
-    if updated != content:
-        with open(path, "w", encoding="utf-8") as f:
-            f.write(updated)
-        print("README leaderboard updated.")
-    else:
+    # Compare ignoring the freshness line so a new timestamp alone doesn't trigger
+    # an hourly no-op commit — only real standings changes rewrite the block.
+    def _data_only(b: str) -> str:
+        return "\n".join(ln for ln in b.splitlines() if not ln.startswith("_Auto-updated"))
+
+    if _data_only(match.group(0)) == _data_only(block):
         print("No change.")
+        return 0
+
+    updated = content[: match.start()] + block + content[match.end() :]
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(updated)
+    print("README leaderboard updated.")
     return 0
 
 
