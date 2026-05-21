@@ -27,24 +27,39 @@ _Auto-updated 2026-05-21 12:44 UTC — combined paper net worth across both simu
 
 ## Getting started
 
-You don't download or run anything. A club admin sets you up with:
+There are no servers for you to run. A club admin sets you up with:
 
 - a **username**,
 - a **Polymarket API key** (a string), and
 - a **Kalshi key id** + a **private key file** (`<you>.pem` — save it, it's only shown once).
 
-Everyone starts with **$25,000 of paper money on each platform**. You trade against the
-club's hosted servers:
+Everyone starts with **$25,000 of paper money on each platform**, traded against the club's
+hosted servers (`https://poly.teddytennant.com` and `https://kalshi.teddytennant.com`).
 
-| Platform   | Base URL                          | What it mimics                      |
-|------------|-----------------------------------|-------------------------------------|
-| Polymarket | `https://poly.teddytennant.com`   | Gamma + CLOB (`/markets`, `/order`) |
-| Kalshi     | `https://kalshi.teddytennant.com` | Trade API v2 (`/trade-api/v2/...`)  |
+### Trading in 3 steps — download one file
 
-**Easiest path — the starter kit:** grab [`examples/predlab.py`](examples/predlab.py), a tiny
-Python client that handles both platforms (including Kalshi's request signing) so you can
-trade in a few lines. See [`examples/README.md`](examples/README.md). Prefer to roll your own?
-Point the official SDKs or plain `curl` at the base URLs — the per-platform steps are below.
+The whole client is a single file, [`examples/predlab.py`](examples/predlab.py). It talks to
+both platforms (and does Kalshi's fiddly request-signing for you), so you don't need any SDK.
+
+1. **Download** [`examples/predlab.py`](examples/predlab.py) and `pip install requests cryptography`.
+2. **Paste in your key** and trade:
+
+   ```python
+   from predlab import PolymarketClient, KalshiClient
+
+   poly = PolymarketClient(api_key="pm_paper_...")           # your Polymarket key
+   print(poly.markets(limit=5))                              # browse markets
+   poly.place_order(token_id="<token>", side="BUY", price=0.55, size=10)
+
+   kal = KalshiClient(key_id="ks_live_...", private_key_pem_path="you.pem")
+   print(kal.balance())                                      # -> $25,000 to start
+   kal.create_order(ticker="<TICKER>", side="bid", count=10, price=0.65)
+   ```
+
+3. **Climb the [leaderboard](#-leaderboard).** Your combined net worth updates automatically.
+
+Full walkthrough: [`examples/README.md`](examples/README.md). Prefer `curl` or the official
+SDKs instead? The base URLs and per-platform details are below.
 
 **What needs your key:**
 
