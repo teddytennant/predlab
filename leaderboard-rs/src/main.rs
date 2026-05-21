@@ -2,8 +2,9 @@
 //!
 //! Fetches both simulators' admin standings *server-side* (so the admin secrets
 //! never leave the box), merges them into a combined paper net-worth ranking,
-//! and serves one self-contained HTML page. The standings are cached briefly so
-//! a burst of visitors doesn't hammer the sims; the page also auto-refreshes.
+//! and serves one self-contained HTML page styled as a plain monochrome
+//! terminal table. The standings are cached briefly so a burst of visitors
+//! doesn't hammer the sims; the page also auto-refreshes.
 //!
 //! Config via env:
 //!   BIND                   listen address (default 0.0.0.0:8003)
@@ -11,8 +12,10 @@
 //!   KALSHI_URL             Kalshi sim base     (default http://localhost:8002)
 //!   PREDLAB_ADMIN_SECRET   X-Admin-Secret for Polymarket /admin/leaderboard
 //!   PREDLAB_KALSHI_SECRET  X-Kalshi-Sim-Admin for Kalshi /admin/leaderboard
+//!   EXCLUDE_USERS          comma-separated usernames hidden from the board
+//!                          (default "club_admin,demo_trader" — staff/seed accounts)
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -43,6 +46,7 @@ struct AppState {
     kalshi_url: String,
     admin_secret: String,
     kalshi_secret: String,
+    exclude: HashSet<String>,
     client: reqwest::Client,
     cache: Arc<Mutex<Cache>>,
 }
@@ -50,6 +54,11 @@ struct AppState {
 impl AppState {
     fn from_env() -> Self {
         let env = |k: &str, d: &str| std::env::var(k).unwrap_or_else(|_| d.to_string());
+        let exclude = env("EXCLUDE_USERS", "club_admin,demo_trader")
+            .split(',')
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .collect();
         Self {
             poly_url: env("POLY_URL", "http://localhost:8001")
                 .trim_end_matches('/')
@@ -59,6 +68,7 @@ impl AppState {
                 .to_string(),
             admin_secret: env("PREDLAB_ADMIN_SECRET", ""),
             kalshi_secret: env("PREDLAB_KALSHI_SECRET", ""),
+            exclude,
             client: reqwest::Client::new(),
             cache: Arc::new(Mutex::new(Cache { html: String::new(), at: None })),
         }
@@ -104,7 +114,8 @@ async fn index(State(st): State<AppState>) -> Html<String> {
     Html(html)
 }
 
-/// Fetch both sims' per-user net worth and merge into a combined ranking.
+/// Fetch both sims' per-user net worth and merge into a combined ranking,
+/// dropping any excluded (staff/seed) usernames.
 async fn fetch_leaders(st: &AppState) -> Result<Vec<Leader>> {
     let net = |v: &serde_json::Value| v.get("net_worth").and_then(|n| n.as_f64()).unwrap_or(0.0);
 
@@ -137,11 +148,17 @@ async fn fetch_leaders(st: &AppState) -> Result<Vec<Leader>> {
     let mut by_user: BTreeMap<String, Leader> = BTreeMap::new();
     for e in &poly {
         if let Some(u) = e.get("username").and_then(|v| v.as_str()) {
+            if st.exclude.contains(u) {
+                continue;
+            }
             by_user.entry(u.to_string()).or_default().poly = net(e);
         }
     }
     for e in &kalshi {
         if let Some(u) = e.get("username").and_then(|v| v.as_str()) {
+            if st.exclude.contains(u) {
+                continue;
+            }
             by_user.entry(u.to_string()).or_default().kalshi = net(e);
         }
     }
@@ -183,67 +200,99 @@ fn esc(s: &str) -> String {
         .replace('"', "&quot;")
 }
 
-const STYLE: &str = r#"
-:root { color-scheme: dark; }
-* { box-sizing: border-box; }
-body {
-  margin: 0; min-height: 100vh;
-  font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
-  background: radial-gradient(1200px 600px at 50% -10%, #1b2440 0%, #0b0f1a 60%);
-  color: #e6e9f2; display: flex; justify-content: center; padding: 40px 16px 64px;
-}
-.wrap { width: 100%; max-width: 760px; }
-header { text-align: center; margin-bottom: 28px; }
-h1 { margin: 0; font-size: clamp(28px, 6vw, 44px); letter-spacing: -0.5px; }
-.sub { color: #9aa3b8; margin-top: 8px; font-size: 15px; }
-table { width: 100%; border-collapse: collapse; background: #121829;
-  border: 1px solid #1f2940; border-radius: 14px; overflow: hidden; }
-th, td { padding: 14px 16px; text-align: left; }
-th { font-size: 12px; text-transform: uppercase; letter-spacing: 0.06em;
-  color: #8b94ad; border-bottom: 1px solid #1f2940; }
-td { border-bottom: 1px solid #161d30; }
-tr:last-child td { border-bottom: none; }
-td.num, th.num { text-align: right; font-variant-numeric: tabular-nums;
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
-.rank { width: 56px; font-size: 20px; text-align: center; }
-.member { font-weight: 600; }
-.total { font-weight: 700; }
-tr.gold { background: linear-gradient(90deg, rgba(255,209,102,0.14), transparent); }
-tr.silver { background: linear-gradient(90deg, rgba(197,205,224,0.10), transparent); }
-tr.bronze { background: linear-gradient(90deg, rgba(205,127,80,0.12), transparent); }
-.foot { text-align: center; color: #6b7488; margin-top: 18px; font-size: 13px; }
-.empty { text-align: center; color: #8b94ad; padding: 36px; }
-"#;
-
-fn render_page(rows: &[Leader]) -> String {
-    let mut body = String::new();
-    if rows.is_empty() {
-        body.push_str(r#"<tr><td colspan="5" class="empty">No members yet — check back once keys are issued.</td></tr>"#);
+fn truncate(s: &str, max: usize) -> String {
+    if s.chars().count() <= max {
+        s.to_string()
     } else {
-        for (i, l) in rows.iter().enumerate() {
-            let rank = i + 1;
-            let (cls, badge) = match rank {
-                1 => ("gold", "🥇".to_string()),
-                2 => ("silver", "🥈".to_string()),
-                3 => ("bronze", "🥉".to_string()),
-                n => ("", n.to_string()),
-            };
-            body.push_str(&format!(
-                "<tr class=\"{cls}\">\
-                   <td class=\"rank\">{badge}</td>\
-                   <td class=\"member\">{name}</td>\
-                   <td class=\"num\">{poly}</td>\
-                   <td class=\"num\">{kalshi}</td>\
-                   <td class=\"num total\">{total}</td>\
-                 </tr>",
-                name = esc(&l.username),
-                poly = fmt_money(l.poly),
-                kalshi = fmt_money(l.kalshi),
-                total = fmt_money(l.total),
-            ));
+        let mut t: String = s.chars().take(max.saturating_sub(1)).collect();
+        t.push('…');
+        t
+    }
+}
+
+enum Align {
+    Left,
+    Right,
+}
+
+/// Render an aligned, box-drawn monospace table (a real terminal table).
+fn build_table(headers: &[&str], aligns: &[Align], rows: &[Vec<String>]) -> String {
+    let ncols = headers.len();
+    let mut widths: Vec<usize> = headers.iter().map(|h| h.chars().count()).collect();
+    for row in rows {
+        for (i, cell) in row.iter().enumerate() {
+            widths[i] = widths[i].max(cell.chars().count());
         }
     }
+    let pad = |cell: &str, i: usize| -> String {
+        let fill = widths[i].saturating_sub(cell.chars().count());
+        match aligns[i] {
+            Align::Left => format!("{}{}", cell, " ".repeat(fill)),
+            Align::Right => format!("{}{}", " ".repeat(fill), cell),
+        }
+    };
+    let border = |l: char, m: char, r: char| -> String {
+        let mut s = String::new();
+        s.push(l);
+        for (i, w) in widths.iter().enumerate() {
+            s.push_str(&"─".repeat(w + 2));
+            s.push(if i + 1 == ncols { r } else { m });
+        }
+        s
+    };
+    let row_str = |cells: &[String]| -> String {
+        let mut s = String::from("│");
+        for (i, cell) in cells.iter().enumerate() {
+            s.push(' ');
+            s.push_str(&pad(cell, i));
+            s.push_str(" │");
+        }
+        s
+    };
 
+    let header_cells: Vec<String> = headers.iter().map(|h| h.to_string()).collect();
+    let mut out = String::new();
+    out.push_str(&border('┌', '┬', '┐'));
+    out.push('\n');
+    out.push_str(&row_str(&header_cells));
+    out.push('\n');
+    out.push_str(&border('├', '┼', '┤'));
+    out.push('\n');
+    for r in rows {
+        out.push_str(&row_str(r));
+        out.push('\n');
+    }
+    out.push_str(&border('└', '┴', '┘'));
+    out
+}
+
+const STYLE: &str = r#"
+:root { color-scheme: dark; }
+html, body { margin: 0; height: 100%; background: #000; }
+body {
+  display: flex; align-items: flex-start; justify-content: center;
+  padding: 48px 16px;
+}
+pre {
+  margin: 0;
+  font-family: "DejaVu Sans Mono", "SFMono-Regular", ui-monospace, Menlo, Consolas, monospace;
+  font-size: 14px; line-height: 1.45;
+  color: #f0f0f0;
+  white-space: pre;
+}
+.dim { color: #666; }
+@media (max-width: 640px) { pre { font-size: 11px; } }
+"#;
+
+/// Wrap a pre-rendered table (or message) in the terminal-style page chrome.
+fn page_shell(table_text: &str) -> String {
+    let content = format!(
+        "<span class=\"dim\">$</span> predlab leaderboard\n\n{}\n\n\
+         <span class=\"dim\"># combined net worth · both simulators · \
+         refreshes every {}s · paper trading only</span>",
+        esc(table_text),
+        REFRESH_SECS,
+    );
     format!(
         r#"<!doctype html>
 <html lang="en">
@@ -251,60 +300,53 @@ fn render_page(rows: &[Leader]) -> String {
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta http-equiv="refresh" content="{refresh}">
-<title>PredLab — Club Leaderboard</title>
+<title>predlab · leaderboard</title>
 <style>{style}</style>
 </head>
-<body>
-  <div class="wrap">
-    <header>
-      <h1>🏆 PredLab Leaderboard</h1>
-      <div class="sub">Combined paper net worth across both simulators · refreshes every {refresh}s</div>
-    </header>
-    <table>
-      <thead>
-        <tr>
-          <th class="rank">#</th>
-          <th>Member</th>
-          <th class="num">Polymarket</th>
-          <th class="num">Kalshi</th>
-          <th class="num">Total</th>
-        </tr>
-      </thead>
-      <tbody>
-        {body}
-      </tbody>
-    </table>
-    <div class="foot">Paper trading only · Prediction Markets Club</div>
-  </div>
-</body>
+<body><main><pre>{content}</pre></main></body>
 </html>"#,
         refresh = REFRESH_SECS,
         style = STYLE,
-        body = body,
+        content = content,
     )
 }
 
+fn render_page(rows: &[Leader]) -> String {
+    if rows.is_empty() {
+        return page_shell("  (no members yet — check back once keys are issued)");
+    }
+    let data: Vec<Vec<String>> = rows
+        .iter()
+        .enumerate()
+        .map(|(i, l)| {
+            vec![
+                (i + 1).to_string(),
+                truncate(&l.username, 24),
+                fmt_money(l.poly),
+                fmt_money(l.kalshi),
+                fmt_money(l.total),
+            ]
+        })
+        .collect();
+    let table = build_table(
+        &["#", "MEMBER", "POLYMARKET", "KALSHI", "TOTAL"],
+        &[Align::Right, Align::Left, Align::Right, Align::Right, Align::Right],
+        &data,
+    );
+    page_shell(&table)
+}
+
 fn render_error(msg: &str) -> String {
-    format!(
-        r#"<!doctype html>
-<html lang="en"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<meta http-equiv="refresh" content="{refresh}">
-<title>PredLab — Leaderboard</title><style>{style}</style></head>
-<body><div class="wrap">
-  <header><h1>🏆 PredLab Leaderboard</h1>
-  <div class="sub">Standings are momentarily unavailable — retrying…</div></header>
-  <div class="empty">{msg}</div>
-</div></body></html>"#,
-        refresh = REFRESH_SECS,
-        style = STYLE,
-        msg = esc(msg),
-    )
+    page_shell(&format!("  standings temporarily unavailable\n  {msg}"))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn leader(name: &str, poly: f64, kalshi: f64) -> Leader {
+        Leader { username: name.into(), poly, kalshi, total: poly + kalshi }
+    }
 
     #[test]
     fn money_groups_thousands() {
@@ -314,28 +356,26 @@ mod tests {
     }
 
     #[test]
-    fn page_ranks_and_medals() {
-        let rows = vec![
-            Leader { username: "alice".into(), poly: 30000.0, kalshi: 25000.0, total: 55000.0 },
-            Leader { username: "bob".into(), poly: 20000.0, kalshi: 20000.0, total: 40000.0 },
-        ];
+    fn table_lists_members_in_order() {
+        let rows = vec![leader("alice", 30000.0, 25000.0), leader("bob", 20000.0, 20000.0)];
         let html = render_page(&rows);
-        assert!(html.contains("🥇"));
+        assert!(html.contains("MEMBER"));
         assert!(html.contains("alice"));
         assert!(html.contains("$55,000.00"));
-        // leader appears before the runner-up
         assert!(html.find("alice").unwrap() < html.find("bob").unwrap());
+        // box-drawing terminal table, no medals
+        assert!(html.contains('┌') && html.contains('│'));
+        assert!(!html.contains('🥇'));
     }
 
     #[test]
     fn empty_roster_renders_placeholder() {
-        assert!(render_page(&[]).contains("No members yet"));
+        assert!(render_page(&[]).contains("no members yet"));
     }
 
     #[test]
     fn username_is_escaped() {
-        let rows = vec![Leader { username: "<script>".into(), ..Default::default() }];
-        let html = render_page(&rows);
+        let html = render_page(&[leader("<script>", 0.0, 0.0)]);
         assert!(!html.contains("<script>"));
         assert!(html.contains("&lt;script&gt;"));
     }

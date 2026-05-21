@@ -72,6 +72,8 @@ services:
       - KALSHI_URL=http://kalshi-sim:8002
       - PREDLAB_ADMIN_SECRET=${ADMIN_SECRET:-change-me-set-in-dotenv}
       - PREDLAB_KALSHI_SECRET=${CLUB_ADMIN_SECRET:-change-me-set-in-dotenv}
+      # Staff/seed accounts hidden from the public board (comma-separated).
+      - EXCLUDE_USERS=${LEADERBOARD_EXCLUDE:-club_admin,demo_trader}
     depends_on:
       - polymarket-sim
       - kalshi-sim
