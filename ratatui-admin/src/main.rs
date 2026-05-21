@@ -1,12 +1,13 @@
 //! PredLab admin TUI.
 //!
-//! Two tabs (switch with `Tab`):
+//! Three tabs. Switch with `l`/`h` (next/prev), or `Tab`/`Shift+Tab`. In the
+//! Issue view `h`/`l` type into the username instead, so use `Tab` there.
 //! - **Issue keys** — type a username, pick a role with ←/→, press `Enter` to
 //!   mint paper keys on *both* simulators and save the member to the roster.
 //!   The freshly issued credentials are copied to your clipboard, and the
 //!   Kalshi private key (shown only once by the server) is saved to
 //!   `~/.predlab/keys/<username>.pem` so the member can actually sign requests.
-//! - **Roster** — browse club members (↑/↓). `c` copies a member's credentials;
+//! - **Roster** — browse club members (`j`/`k` or ↑/↓). `c` copies a member's credentials;
 //!   `r` resets the selected member's balances to the starting amount, `R`
 //!   resets *everyone* (start-of-competition wipe), and `x` permanently removes
 //!   the selected member from both sims and the roster. Destructive actions ask
@@ -205,15 +206,21 @@ fn run_app<B: ratatui::backend::Backend>(
                         continue;
                     }
                     KeyCode::Tab => {
-                        app.view = match app.view {
-                            View::Issue => View::Roster,
-                            View::Roster => View::Leaderboard,
-                            View::Leaderboard => View::Issue,
-                        };
-                        clamp_selection(app);
-                        if app.view == View::Leaderboard {
-                            refresh_leaderboard(app, rt);
-                        }
+                        switch_view(app, rt, next_view(app.view));
+                        continue;
+                    }
+                    KeyCode::BackTab => {
+                        switch_view(app, rt, prev_view(app.view));
+                        continue;
+                    }
+                    // Vim-style tab switching. Skipped in the Issue view, where
+                    // h/l are letters the user is typing into a username.
+                    KeyCode::Char('l') if app.view != View::Issue => {
+                        switch_view(app, rt, next_view(app.view));
+                        continue;
+                    }
+                    KeyCode::Char('h') if app.view != View::Issue => {
+                        switch_view(app, rt, prev_view(app.view));
                         continue;
                     }
                     _ => {}
@@ -232,6 +239,32 @@ fn run_app<B: ratatui::backend::Backend>(
         }
     }
     Ok(())
+}
+
+/// Tab order, forward (l / Tab) and backward (h / Shift+Tab).
+fn next_view(v: View) -> View {
+    match v {
+        View::Issue => View::Roster,
+        View::Roster => View::Leaderboard,
+        View::Leaderboard => View::Issue,
+    }
+}
+fn prev_view(v: View) -> View {
+    match v {
+        View::Issue => View::Leaderboard,
+        View::Roster => View::Issue,
+        View::Leaderboard => View::Roster,
+    }
+}
+
+/// Switch to `target`, keeping the roster selection valid and auto-refreshing
+/// the leaderboard when it becomes visible.
+fn switch_view(app: &mut App, rt: &Runtime, target: View) {
+    app.view = target;
+    clamp_selection(app);
+    if app.view == View::Leaderboard {
+        refresh_leaderboard(app, rt);
+    }
 }
 
 fn handle_issue_key(app: &mut App, rt: &Runtime, conn: &Connection, code: KeyCode) {
@@ -257,8 +290,8 @@ fn handle_issue_key(app: &mut App, rt: &Runtime, conn: &Connection, code: KeyCod
 fn handle_roster_key(app: &mut App, code: KeyCode) {
     match code {
         KeyCode::Char('q') => app.should_quit = true,
-        KeyCode::Up => app.roster_sel = app.roster_sel.saturating_sub(1),
-        KeyCode::Down => {
+        KeyCode::Up | KeyCode::Char('k') => app.roster_sel = app.roster_sel.saturating_sub(1),
+        KeyCode::Down | KeyCode::Char('j') => {
             if app.roster_sel + 1 < app.students.len() {
                 app.roster_sel += 1;
             }
@@ -928,9 +961,9 @@ fn fmt_money(v: f64) -> String {
 
 fn render_footer(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
     let help = match app.view {
-        View::Issue => "Tab next · ←/→ role · Enter issue · Esc quit",
-        View::Roster => "Tab · ↑/↓ select · c copy · r reset · x remove · R reset-all · q quit",
-        View::Leaderboard => "Tab next · r refresh · q/Esc quit",
+        View::Issue => "Tab/⇧Tab switch tab · ←/→ role · Enter issue · Esc quit",
+        View::Roster => "h/l tab · j/k select · c copy · r reset · x remove · R reset-all · q quit",
+        View::Leaderboard => "h/l tab · r refresh · q/Esc quit",
     };
     let footer = Paragraph::new(vec![
         Line::from(Span::styled(
