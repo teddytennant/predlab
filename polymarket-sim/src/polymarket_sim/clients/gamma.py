@@ -28,7 +28,7 @@ class GammaClient:
             headers={"User-Agent": "polymarket-sim/0.1 (educational)"},
         )
 
-    async def fetch_active_markets(self, limit: int = 200) -> list[dict[str, Any]]:
+    async def fetch_active_markets(self, limit: int = 1000) -> list[dict[str, Any]]:
         """Fetch active markets. Returns raw list of dicts from Gamma."""
         url = f"/markets?limit={limit}&active=true"
         try:

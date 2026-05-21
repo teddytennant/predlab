@@ -57,7 +57,7 @@ def _safe_float(val: Any) -> float | None:
         return None
 
 
-async def sync_markets_from_gamma(db: Session, limit: int = 200) -> int:
+async def sync_markets_from_gamma(db: Session, limit: int = 1000) -> int:
     """Fetch from Gamma and upsert into local Market table. Returns count upserted."""
     client = GammaClient()
     try:
