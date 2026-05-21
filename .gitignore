@@ -1,0 +1,23 @@
+# Secrets / local config
+.env
+.env.local
+
+# Databases & runtime data
+*.db
+data/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.venv/
+venv/
+
+# Rust
+target/
+
+# Editor / OS
+.DS_Store
