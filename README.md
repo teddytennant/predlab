@@ -8,6 +8,24 @@ oversight. Everything is one repo.
 
 > **PAPER TRADING ONLY — NOT AFFILIATED WITH POLYMARKET OR KALSHI.** Educational use.
 
+## 🏆 Leaderboard
+
+Refreshed hourly by a GitHub Action from the live club server (see
+[`scripts/gen_leaderboard.py`](scripts/gen_leaderboard.py)).
+
+<!-- LEADERBOARD:START -->
+
+_Auto-updated 2026-05-21 12:43 UTC — combined paper net worth across both simulators._
+
+| # | Member | Polymarket | Kalshi | Total |
+|--:|:-------|-----------:|-------:|------:|
+| 🥇 | club_admin | $25,000.00 | $25,000.00 | **$50,000.00** |
+| 🥈 | username | $25,000.00 | $25,000.00 | **$50,000.00** |
+| 🥉 | trump | $25,000.00 | $25,000.00 | **$50,000.00** |
+| 4 | demo_trader | $25,000.00 | $0.00 | **$25,000.00** |
+
+<!-- LEADERBOARD:END -->
+
 ## Repository structure
 
 ```
