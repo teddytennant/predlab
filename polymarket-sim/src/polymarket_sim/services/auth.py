@@ -24,6 +24,8 @@ from __future__ import annotations
 import hashlib
 import logging
 import secrets
+from collections.abc import Callable
+from dataclasses import dataclass
 
 from fastapi import Depends, Header, HTTPException, status
 from sqlalchemy import select
@@ -129,15 +131,69 @@ def get_current_user(
     return user
 
 
+# Role hierarchy. Higher rank ⊇ lower rank's powers.
+ROLE_RANK: dict[str, int] = {"member": 0, "admin": 1, "owner": 2}
+VALID_ROLES = frozenset(ROLE_RANK)
+
+
+@dataclass
+class Principal:
+    """The authenticated caller of an admin-gated endpoint."""
+
+    rank: int
+    user: User | None  # None when authenticated via the master secret (owner)
+
+
+def _resolve_principal(
+    session: Session, x_admin_secret: str | None, api_key: str | None
+) -> Principal:
+    """Resolve the caller's effective role rank.
+
+    The master secret authenticates as ``owner`` (bootstrap / break-glass). Otherwise a
+    valid paper key authenticates as its user's role. Unauthenticated → rank ``-1``.
+    """
+    if x_admin_secret and secrets.compare_digest(x_admin_secret, settings.admin_secret):
+        return Principal(rank=ROLE_RANK["owner"], user=None)
+    if api_key:
+        user = validate_paper_api_key(session, api_key)
+        if user:
+            return Principal(rank=ROLE_RANK.get(user.role, 0), user=user)
+    return Principal(rank=-1, user=None)
+
+
+def require_role(min_role: str) -> Callable[..., Principal]:
+    """Dependency factory: require at least ``min_role`` (master secret counts as owner)."""
+    min_rank = ROLE_RANK[min_role]
+
+    def _dep(
+        x_admin_secret: str | None = Header(default=None, alias="X-Admin-Secret"),
+        api_key: str | None = Depends(get_api_key_from_headers),
+        session: Session = Depends(get_session),
+    ) -> Principal:
+        principal = _resolve_principal(session, x_admin_secret, api_key)
+        if principal.rank < min_rank:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=f"requires '{min_role}' role (an admin key or the X-Admin-Secret)",
+            )
+        return principal
+
+    return _dep
+
+
 def require_admin(
     x_admin_secret: str | None = Header(default=None, alias="X-Admin-Secret"),
-) -> None:
-    """FastAPI dependency for admin-only endpoints. Raises 403 on mismatch."""
-    if not x_admin_secret or x_admin_secret != settings.admin_secret:
+    api_key: str | None = Depends(get_api_key_from_headers),
+    session: Session = Depends(get_session),
+) -> Principal:
+    """Back-compat dependency: require ≥ admin (an admin/owner key or the master secret)."""
+    principal = _resolve_principal(session, x_admin_secret, api_key)
+    if principal.rank < ROLE_RANK["admin"]:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Invalid admin secret (X-Admin-Secret header)",
+            detail="requires admin role (an admin key or the X-Admin-Secret)",
         )
+    return principal
 
 
 def ensure_paper_account(db: Session, user: User) -> PaperAccount:
@@ -160,19 +216,22 @@ def ensure_paper_account(db: Session, user: User) -> PaperAccount:
 
 
 def create_demo_user_with_key(
-    db: Session, username: str, display_name: str | None = None
+    db: Session, username: str, display_name: str | None = None, role: str = "member"
 ) -> tuple[User, str, str]:
     """
     Admin helper: create User + PaperAccount + ApiKey (paper).
     Returns (user, key_prefix, plain_secret_for_user)
     The plain_secret should be shown only once (like real CLOB key creation).
     """
+    if role not in VALID_ROLES:
+        raise ValueError(f"invalid role {role!r} (one of {sorted(VALID_ROLES)})")
+
     # Unique username
     existing = db.execute(select(User).where(User.username == username)).scalar_one_or_none()
     if existing:
         raise ValueError(f"User {username} already exists")
 
-    user = User(username=username, display_name=display_name or username)
+    user = User(username=username, display_name=display_name or username, role=role)
     db.add(user)
     db.flush()
 

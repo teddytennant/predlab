@@ -46,6 +46,11 @@ class User(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     username: Mapped[str] = mapped_column(String(64), unique=True, nullable=False, index=True)
     display_name: Mapped[str | None] = mapped_column(String(128))
+    # Access role: "member" (own account only), "admin" (issue/revoke keys,
+    # reset balances), or "owner" (everything, incl. force-resolve markets).
+    role: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="member", server_default="member"
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime, server_default=func.now(), nullable=False
     )

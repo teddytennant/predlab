@@ -44,9 +44,12 @@ from .models.schemas import (
     UserOrderOut,
 )
 from .services.auth import (
+    ROLE_RANK,
+    VALID_ROLES,
+    Principal,
     create_demo_user_with_key,
     get_current_user,
-    require_admin,
+    require_role,
 )
 from .services.orderbook import OrderBookEntry, get_orderbook
 from .services.paper_trading import (
@@ -567,14 +570,24 @@ def create_app() -> FastAPI:
     async def admin_create_key(
         username: str,
         display_name: str | None = None,
-        _: None = Depends(require_admin),
+        role: str = "member",
+        principal: Principal = Depends(require_role("admin")),
         session: Session = Depends(get_session),
     ) -> dict[str, Any]:
-        """Create a new paper user + return the key (secret shown once)."""
+        """Create a new paper user + return the key (secret shown once).
+
+        Any admin can mint a member key; only an owner can mint admin/owner keys.
+        """
+        role = role.lower()
+        if role not in VALID_ROLES:
+            raise HTTPException(400, f"invalid role (one of {sorted(VALID_ROLES)})")
+        if ROLE_RANK[role] >= ROLE_RANK["admin"] and principal.rank < ROLE_RANK["owner"]:
+            raise HTTPException(403, "only an owner can grant admin/owner roles")
         try:
-            user, key, secret = create_demo_user_with_key(session, username, display_name)
+            user, key, secret = create_demo_user_with_key(session, username, display_name, role)
             return {
                 "username": user.username,
+                "role": user.role,
                 "api_key": key,
                 "secret": secret,
                 "note": "Store the secret securely. Use api_key in POLY_API_KEY header.",
@@ -582,10 +595,46 @@ def create_app() -> FastAPI:
         except ValueError as ve:
             raise HTTPException(400, str(ve)) from None
 
+    @app.post("/admin/set-role", tags=["admin"])
+    async def admin_set_role(
+        username: str,
+        role: str,
+        _: Principal = Depends(require_role("owner")),
+        session: Session = Depends(get_session),
+    ) -> dict[str, Any]:
+        """Promote/demote an existing user (owner only)."""
+        role = role.lower()
+        if role not in VALID_ROLES:
+            raise HTTPException(400, f"invalid role (one of {sorted(VALID_ROLES)})")
+        u = session.execute(select(User).where(User.username == username)).scalar_one_or_none()
+        if not u:
+            raise HTTPException(404, "user not found")
+        u.role = role
+        session.commit()
+        return {"username": username, "role": role}
+
+    @app.post("/admin/revoke-key", tags=["admin"])
+    async def admin_revoke_key(
+        username: str,
+        _: Principal = Depends(require_role("admin")),
+        session: Session = Depends(get_session),
+    ) -> dict[str, Any]:
+        """Deactivate all of a user's API keys (admin)."""
+        from .models.db import ApiKey
+
+        u = session.execute(select(User).where(User.username == username)).scalar_one_or_none()
+        if not u:
+            raise HTTPException(404, "user not found")
+        keys = session.execute(select(ApiKey).where(ApiKey.user_id == u.id)).scalars().all()
+        for k in keys:
+            k.is_active = False
+        session.commit()
+        return {"revoked": username, "keys_disabled": len(keys)}
+
     @app.post("/admin/reset-balance", tags=["admin"])
     async def admin_reset_balance(
         username: str | None = None,
-        _: None = Depends(require_admin),
+        _: Principal = Depends(require_role("admin")),
         session: Session = Depends(get_session),
     ) -> dict[str, Any]:
         """Reset one or all paper balances to starting value (teaching resets)."""
@@ -613,10 +662,10 @@ def create_app() -> FastAPI:
     async def admin_force_resolve(
         market_id: str,
         resolution: str = "yes",
-        _: None = Depends(require_admin),
+        _: Principal = Depends(require_role("owner")),
         session: Session = Depends(get_session),
     ) -> dict[str, Any]:
-        """Force settlement for a market (manual trigger for teaching)."""
+        """Force settlement for a market (owner only — this decides winners)."""
         return force_resolve_market(session, market_id, resolution)
 
     # Legacy stub kept for Phase 1 scripts
