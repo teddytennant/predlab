@@ -15,7 +15,7 @@ Refreshed hourly by a GitHub Action from the live club server (see
 
 <!-- LEADERBOARD:START -->
 
-_Auto-updated 2026-05-21 12:43 UTC — combined paper net worth across both simulators._
+_Auto-updated 2026-05-21 12:44 UTC — combined paper net worth across both simulators._
 
 | # | Member | Polymarket | Kalshi | Total |
 |--:|:-------|-----------:|-------:|------:|
