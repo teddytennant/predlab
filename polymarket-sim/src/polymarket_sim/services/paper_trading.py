@@ -81,7 +81,9 @@ def get_available_balance(db: Session, user: User) -> float:
 def _adjust_balance(db: Session, user: User, delta: float, reason: str) -> PaperAccount:
     """Internal: mutate paper balance. delta positive = credit."""
     acct = ensure_paper_account(db, user)
-    new_bal = float(acct.balance_usd) + delta
+    # Numeric columns load back as Decimal; coerce to float so callers can pass
+    # either a Decimal (reloaded order.price/size) or a float without TypeErrors.
+    new_bal = float(acct.balance_usd) + float(delta)
     if new_bal < -1e-9:
         raise ValueError(f"Insufficient paper balance for {reason} (would go to {new_bal})")
     acct.balance_usd = new_bal  # type: ignore[assignment]
@@ -439,7 +441,7 @@ def force_resolve_market(db: Session, market_id: str, resolution: str = "yes") -
         # Heuristic: first token in market is Yes, second No (common convention)
         token_list = market.clob_token_ids or []
         payout = yes_payout if (not token_list or pos.clob_token_id == token_list[0]) else no_payout
-        proceeds = pos.size * payout
+        proceeds = float(pos.size) * payout
         user = db.get(User, pos.user_id)
         if user:
             _adjust_balance(db, user, proceeds, f"resolution payout {market_id} {resolution}")
