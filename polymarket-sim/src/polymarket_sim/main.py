@@ -54,11 +54,14 @@ from .services.auth import (
 from .services.orderbook import OrderBookEntry, get_orderbook
 from .services.paper_trading import (
     cancel_paper_order,
+    delete_user,
     force_resolve_market,
     leaderboard,
     list_user_open_orders,
     list_user_positions_with_pnl,
     place_paper_order,
+    reset_all_to_starting,
+    reset_user_to_starting,
 )
 from .services.sync import sync_markets_from_gamma
 
@@ -638,26 +641,30 @@ def create_app() -> FastAPI:
         _: Principal = Depends(require_role("admin")),
         session: Session = Depends(get_session),
     ) -> dict[str, Any]:
-        """Reset one or all paper balances to starting value (teaching resets)."""
-        from .models.db import PaperAccount, User
+        """Reset one or all members to a clean starting state (teaching resets).
 
+        Cancels open orders and clears positions as well as restoring cash, so a
+        reset member's net worth is exactly the starting balance. Omit
+        ``username`` to wipe everyone (e.g. before a new competition).
+        """
         if username:
             u = session.execute(select(User).where(User.username == username)).scalar_one_or_none()
             if not u:
                 raise HTTPException(404, "user not found")
-            acct = session.execute(
-                select(PaperAccount).where(PaperAccount.user_id == u.id)
-            ).scalar_one_or_none()
-            if acct:
-                acct.balance_usd = settings.starting_balance_usd  # type: ignore[assignment]
-            session.commit()
-            return {"reset": username, "balance": settings.starting_balance_usd}
-        else:
-            accts = session.execute(select(PaperAccount)).scalars().all()
-            for a in accts:
-                a.balance_usd = settings.starting_balance_usd  # type: ignore[assignment]
-            session.commit()
-            return {"reset": "all", "count": len(accts), "balance": settings.starting_balance_usd}
+            return reset_user_to_starting(session, u, settings.starting_balance_usd)
+        return reset_all_to_starting(session, settings.starting_balance_usd)
+
+    @app.post("/admin/delete-user", tags=["admin"])
+    async def admin_delete_user(
+        username: str,
+        _: Principal = Depends(require_role("admin")),
+        session: Session = Depends(get_session),
+    ) -> dict[str, Any]:
+        """Permanently remove a member and all their data (they left the club)."""
+        try:
+            return delete_user(session, username)
+        except ValueError as ve:
+            raise HTTPException(404, str(ve)) from None
 
     @app.post("/admin/force-resolve", tags=["admin"])
     async def admin_force_resolve(

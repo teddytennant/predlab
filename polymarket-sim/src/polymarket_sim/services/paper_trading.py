@@ -22,12 +22,12 @@ import logging
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import delete, select, update
 from sqlalchemy.orm import Session
 
 from ..models.db import Market, Order, PaperAccount, Position, Trade, User
 from .auth import ensure_paper_account
-from .orderbook import OrderBookEntry, get_orderbook
+from .orderbook import OrderBookEntry, get_orderbook, remove_user_orders, reset_orderbook
 
 logger = logging.getLogger(__name__)
 
@@ -432,6 +432,78 @@ def leaderboard(db: Session) -> list[dict[str, Any]]:
     rows = [{"username": u.username, "role": u.role, **compute_net_worth(db, u)} for u in users]
     rows.sort(key=lambda r: r["net_worth"], reverse=True)
     return rows
+
+
+# ---------------------------------------------------------------------------
+# Admin: balance resets & member removal (teaching ops)
+# ---------------------------------------------------------------------------
+
+
+def reset_user_to_starting(db: Session, user: User, starting_balance: float) -> dict[str, Any]:
+    """Return one member to a clean starting state.
+
+    Cancels open orders (and purges them from the live book), clears all
+    positions, and restores cash to the starting balance. Net worth afterwards
+    is exactly ``starting_balance``.
+    """
+    open_orders = (
+        db.execute(
+            select(Order).where(Order.user_id == user.id, Order.status.in_(["open", "partial"]))
+        )
+        .scalars()
+        .all()
+    )
+    for o in open_orders:
+        o.status = "cancelled"
+    remove_user_orders(user.id)
+
+    db.execute(delete(Position).where(Position.user_id == user.id))
+
+    acct = ensure_paper_account(db, user)
+    acct.balance_usd = starting_balance  # type: ignore[assignment]
+    db.commit()
+    return {
+        "reset": user.username,
+        "balance": starting_balance,
+        "orders_cancelled": len(open_orders),
+    }
+
+
+def reset_all_to_starting(db: Session, starting_balance: float) -> dict[str, Any]:
+    """Reset every member to a clean starting state (start-of-competition wipe)."""
+    users = db.execute(select(User)).scalars().all()
+    for u in users:
+        db.execute(
+            update(Order)
+            .where(Order.user_id == u.id, Order.status.in_(["open", "partial"]))
+            .values(status="cancelled")
+        )
+    db.execute(delete(Position))
+    for u in users:
+        ensure_paper_account(db, u).balance_usd = starting_balance  # type: ignore[assignment]
+    db.commit()
+    reset_orderbook()  # clear every in-memory book at once
+    return {"reset": "all", "count": len(users), "balance": starting_balance}
+
+
+def delete_user(db: Session, username: str) -> dict[str, Any]:
+    """Permanently remove a member and everything they own (they left the club).
+
+    Deletes trades, orders and positions first (no cascade on those), then the
+    user row — which cascades their API keys and paper account — and finally
+    purges any resting orders from the in-memory book.
+    """
+    user = db.execute(select(User).where(User.username == username)).scalar_one_or_none()
+    if not user:
+        raise ValueError("user not found")
+    user_id = user.id
+    db.execute(delete(Trade).where(Trade.user_id == user_id))
+    db.execute(delete(Order).where(Order.user_id == user_id))
+    db.execute(delete(Position).where(Position.user_id == user_id))
+    db.delete(user)  # cascades api_keys + paper_account
+    db.commit()
+    remove_user_orders(user_id)
+    return {"deleted": username}
 
 
 # ---------------------------------------------------------------------------

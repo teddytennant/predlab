@@ -78,8 +78,10 @@ The TUI has three tabs (`Tab` to cycle):
 - **Issue keys** — type a username, pick a role with `←/→`, `Enter` mints paper keys on
   *both* simulators, saves the member to the roster, copies a credentials block to your
   clipboard, and writes the Kalshi private key to `~/.predlab/keys/<username>.pem`.
-- **Roster** — the club's students from `~/.predlab/students.db` (`↑/↓` to select, `c` to
-  re-copy a member's credentials).
+- **Roster** — the club's students from `~/.predlab/students.db` (`↑/↓` to select). Member
+  ops: `c` re-copies credentials, `r` resets the selected member's balances to the starting
+  amount, `R` resets *everyone* (start-of-competition wipe), and `x` permanently removes the
+  selected member from both sims and the roster. Destructive actions need a `y` confirmation.
 - **Leaderboard** — every member ranked by **combined paper net worth** across both sims
   (live; `r` refreshes).
 
@@ -114,7 +116,7 @@ Every user has a role. Key issuance is gated on **both** sims — students canno
 | Role     | Can do                                                            |
 |----------|-------------------------------------------------------------------|
 | `member` | Trade & view **their own** account only (the default).            |
-| `admin`  | Issue/revoke member keys, reset balances. (e.g. the VP.)          |
+| `admin`  | Issue/revoke keys, reset balances, remove members. (e.g. the VP.) |
 | `owner`  | Everything, incl. force-resolving markets and granting roles.     |
 
 The **master secret** (`ADMIN_SECRET` for Polymarket, `CLUB_ADMIN_SECRET` for Kalshi)
@@ -126,6 +128,18 @@ Only an owner may mint `admin`/`owner` keys. The `predlab` TUI has a role picker
 (Kalshi) return every member ranked by paper net worth (cash + open positions marked to the
 current price). Both are admin-gated. The TUI's **Leaderboard** tab merges them into a single
 combined ranking.
+
+**Admin teaching ops** (all admin-gated; the `predlab` TUI fires them on both sims at once):
+
+| Action            | Polymarket                                  | Kalshi                                          |
+|-------------------|---------------------------------------------|-------------------------------------------------|
+| Reset one member  | `POST /admin/reset-balance?username=alice`  | `POST /trade-api/v2/admin/reset-user?username=alice` |
+| Reset **everyone** | `POST /admin/reset-balance` (no username)  | `POST /trade-api/v2/admin/reset-user` (no username)  |
+| Remove a member   | `POST /admin/delete-user?username=alice`    | `POST /trade-api/v2/admin/delete-user?username=alice` |
+
+A *reset* is a clean slate — cash returns to the starting balance, open orders are cancelled
+and positions cleared, so net worth is exactly the starting amount. *Remove* permanently
+deletes the member and all their data (for when someone leaves the club).
 
 ### Polymarket (simple header key)
 

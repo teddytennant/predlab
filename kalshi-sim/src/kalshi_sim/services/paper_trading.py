@@ -451,16 +451,16 @@ class PaperTradingService:
 
     # --- Admin / settlement ---
 
-    def admin_reset_user(self, username: str) -> dict:
-        # Authorization is enforced at the route layer (admin role / club secret).
-        user = self.db.query(User).filter(User.username == username).first()
-        if not user:
-            return {"reset": False, "reason": "no such user"}
+    def _reset_one(self, user: User) -> int:
+        """Restore one member to a clean starting state (no commit / book rebuild).
 
+        Sets cash to the starting balance, cancels open orders and zeroes
+        positions. Callers batch the commit + book rebuild. Returns the number of
+        open orders cancelled.
+        """
         pa = self._get_or_create_paper_account(user.id)
         pa.balance_cents = self.settings.starting_balance_cents
 
-        # cancel all open orders for user
         open_orders = self.db.query(DBOrder).filter(
             DBOrder.user_id == user.id, DBOrder.status.in_(["open", "partially_filled"])
         ).all()
@@ -468,15 +468,59 @@ class PaperTradingService:
             o.status = "cancelled"
             remove_order(o.ticker, o.id)
 
-        # zero positions (or leave for history; for reset zero)
-        positions = self.db.query(Position).filter(Position.user_id == user.id).all()
-        for p in positions:
+        for p in self.db.query(Position).filter(Position.user_id == user.id).all():
             p.yes_contracts = 0
+            p.no_contracts = 0
+        return len(open_orders)
 
+    def admin_reset_user(self, username: str) -> dict:
+        # Authorization is enforced at the route layer (admin role / club secret).
+        user = self.db.query(User).filter(User.username == username).first()
+        if not user:
+            return {"reset": False, "reason": "no such user"}
+        cancelled = self._reset_one(user)
         self.db.commit()
-        # rebuild books
         rebuild_books_from_db(self.db)
-        return {"reset": True, "user": username, "new_balance_cents": pa.balance_cents}
+        return {
+            "reset": True,
+            "user": username,
+            "new_balance_cents": self.settings.starting_balance_cents,
+            "orders_cancelled": cancelled,
+        }
+
+    def admin_reset_all(self) -> dict:
+        """Reset every member to a clean starting state (start-of-competition wipe)."""
+        users = self.db.query(User).all()
+        for u in users:
+            self._reset_one(u)
+        self.db.commit()
+        rebuild_books_from_db(self.db)
+        return {
+            "reset": True,
+            "user": "all",
+            "count": len(users),
+            "new_balance_cents": self.settings.starting_balance_cents,
+        }
+
+    def admin_delete_user(self, username: str) -> dict:
+        """Permanently remove a member and all their data (they left the club)."""
+        user = self.db.query(User).filter(User.username == username).first()
+        if not user:
+            raise ValueError("no such user")
+        # Drop any resting orders from the live books before deleting the rows.
+        open_orders = self.db.query(DBOrder).filter(
+            DBOrder.user_id == user.id, DBOrder.status.in_(["open", "partially_filled"])
+        ).all()
+        for o in open_orders:
+            remove_order(o.ticker, o.id)
+        # Delete owned rows that lack a cascade, then the user (cascades keys + account).
+        self.db.query(Trade).filter(Trade.user_id == user.id).delete()
+        self.db.query(DBOrder).filter(DBOrder.user_id == user.id).delete()
+        self.db.query(Position).filter(Position.user_id == user.id).delete()
+        self.db.delete(user)
+        self.db.commit()
+        rebuild_books_from_db(self.db)
+        return {"deleted": username}
 
     def admin_force_resolve(self, ticker: str, result: str) -> dict:
         # Authorization is enforced at the route layer (owner role / club secret).

@@ -6,8 +6,11 @@
 //!   The freshly issued credentials are copied to your clipboard, and the
 //!   Kalshi private key (shown only once by the server) is saved to
 //!   `~/.predlab/keys/<username>.pem` so the member can actually sign requests.
-//! - **Roster** — browse club members (↑/↓); press `c` to copy a member's
-//!   credentials block to the clipboard.
+//! - **Roster** — browse club members (↑/↓). `c` copies a member's credentials;
+//!   `r` resets the selected member's balances to the starting amount, `R`
+//!   resets *everyone* (start-of-competition wipe), and `x` permanently removes
+//!   the selected member from both sims and the roster. Destructive actions ask
+//!   for a `y` confirmation first.
 //! - **Leaderboard** — every member ranked by combined paper net worth across
 //!   both sims (live; press `r` to refresh).
 //!
@@ -88,6 +91,16 @@ enum View {
     Leaderboard,
 }
 
+/// A destructive admin action awaiting a `y` confirmation. These touch live
+/// paper accounts on both sims, so we never fire them on a single keystroke.
+#[derive(Clone, PartialEq, Eq)]
+enum Pending {
+    None,
+    ResetMember(String),
+    ResetAll,
+    RemoveMember(String),
+}
+
 /// One row of the combined leaderboard: a member's net worth on each sim.
 #[derive(Clone, Default)]
 struct Leader {
@@ -106,6 +119,7 @@ struct App {
     roster_sel: usize,
     last: Option<Issued>,
     leaders: Vec<Leader>,
+    pending: Pending,
     should_quit: bool,
 }
 
@@ -120,6 +134,7 @@ impl App {
             roster_sel: 0,
             last: None,
             leaders: Vec::new(),
+            pending: Pending::None,
             should_quit: false,
         }
     }
@@ -166,6 +181,17 @@ fn run_app<B: ratatui::backend::Backend>(
         if event::poll(std::time::Duration::from_millis(200))? {
             if let Event::Key(key) = event::read()? {
                 if key.kind != KeyEventKind::Press {
+                    continue;
+                }
+                // A destructive action is awaiting confirmation: `y` executes it,
+                // anything else (incl. Tab/Esc) cancels.
+                if app.pending != Pending::None {
+                    let pending = std::mem::replace(&mut app.pending, Pending::None);
+                    if matches!(key.code, KeyCode::Char('y') | KeyCode::Char('Y')) {
+                        confirm_pending(app, rt, conn, pending);
+                    } else {
+                        app.message = "Cancelled.".into();
+                    }
                     continue;
                 }
                 // Global keys (work in any view).
@@ -238,7 +264,79 @@ fn handle_roster_key(app: &mut App, code: KeyCode) {
             }
         }
         KeyCode::Char('c') => copy_selected_member(app),
+        KeyCode::Char('r') => request_reset_member(app),
+        KeyCode::Char('R') => request_reset_all(app),
+        KeyCode::Char('x') | KeyCode::Delete => request_remove_member(app),
         _ => {}
+    }
+}
+
+fn selected_username(app: &App) -> Option<String> {
+    app.students.get(app.roster_sel).map(|s| s.username.clone())
+}
+
+/// Stage a single-member balance reset, pending `y` confirmation.
+fn request_reset_member(app: &mut App) {
+    match selected_username(app) {
+        Some(u) => {
+            app.message =
+                format!("⚠ Reset {u} to the starting balance on BOTH sims? Press y to confirm.");
+            app.pending = Pending::ResetMember(u);
+        }
+        None => app.message = "Roster is empty — nothing to reset.".into(),
+    }
+}
+
+/// Stage a wipe of every member's balance, pending `y` confirmation.
+fn request_reset_all(app: &mut App) {
+    app.message =
+        "⚠ Reset ALL members to the starting balance on BOTH sims? Press y to confirm.".into();
+    app.pending = Pending::ResetAll;
+}
+
+/// Stage permanent removal of a member, pending `y` confirmation.
+fn request_remove_member(app: &mut App) {
+    match selected_username(app) {
+        Some(u) => {
+            app.message = format!(
+                "⚠ PERMANENTLY remove {u} from both sims and the roster? Press y to confirm."
+            );
+            app.pending = Pending::RemoveMember(u);
+        }
+        None => app.message = "Roster is empty — nothing to remove.".into(),
+    }
+}
+
+/// Execute a confirmed destructive action against the live sims.
+fn confirm_pending(app: &mut App, rt: &Runtime, conn: &Connection, pending: Pending) {
+    match pending {
+        Pending::ResetMember(u) => {
+            app.message = format!("Resetting {u}…");
+            app.message = match rt.block_on(reset_member(&u)) {
+                Ok(msg) => msg,
+                Err(e) => format!("❌ {e}"),
+            };
+        }
+        Pending::ResetAll => {
+            app.message = "Resetting all members…".into();
+            app.message = match rt.block_on(reset_all()) {
+                Ok(msg) => msg,
+                Err(e) => format!("❌ {e}"),
+            };
+        }
+        Pending::RemoveMember(u) => {
+            app.message = format!("Removing {u}…");
+            app.message = match rt.block_on(remove_member(&u)) {
+                Ok(msg) => {
+                    let _ = registry::delete_student(conn, &u);
+                    app.students = registry::list_students(conn).unwrap_or_default();
+                    clamp_selection(app);
+                    msg
+                }
+                Err(e) => format!("❌ {e}"),
+            };
+        }
+        Pending::None => {}
     }
 }
 
@@ -344,6 +442,93 @@ async fn fetch_leaderboard() -> Result<Vec<Leader>> {
         .collect();
     rows.sort_by(|a, b| b.total.partial_cmp(&a.total).unwrap_or(std::cmp::Ordering::Equal));
     Ok(rows)
+}
+
+/// POST an admin action to one sim. `tolerate_404` makes removal idempotent
+/// (a member already gone from one sim isn't treated as a failure).
+async fn post_admin(
+    url: String,
+    header: &str,
+    secret: String,
+    query: &[(&str, &str)],
+    tolerate_404: bool,
+) -> Result<()> {
+    let resp = reqwest::Client::new()
+        .post(&url)
+        .header(header, secret)
+        .query(query)
+        .send()
+        .await
+        .with_context(|| format!("calling {url}"))?;
+    if tolerate_404 && resp.status() == reqwest::StatusCode::NOT_FOUND {
+        return Ok(());
+    }
+    resp.error_for_status()
+        .with_context(|| format!("{url} rejected (check admin secret / role)"))?;
+    Ok(())
+}
+
+/// Reset one member to the starting balance on both sims (clears positions/orders).
+async fn reset_member(username: &str) -> Result<String> {
+    post_admin(
+        format!("{}/admin/reset-balance", poly_url()),
+        "X-Admin-Secret",
+        admin_secret(),
+        &[("username", username)],
+        false,
+    )
+    .await?;
+    post_admin(
+        format!("{}/trade-api/v2/admin/reset-user", kalshi_url()),
+        "X-Kalshi-Sim-Admin",
+        kalshi_admin_secret(),
+        &[("username", username)],
+        false,
+    )
+    .await?;
+    Ok(format!("♻ Reset {username} to the starting balance on both sims."))
+}
+
+/// Reset every member to the starting balance on both sims.
+async fn reset_all() -> Result<String> {
+    post_admin(
+        format!("{}/admin/reset-balance", poly_url()),
+        "X-Admin-Secret",
+        admin_secret(),
+        &[],
+        false,
+    )
+    .await?;
+    post_admin(
+        format!("{}/trade-api/v2/admin/reset-user", kalshi_url()),
+        "X-Kalshi-Sim-Admin",
+        kalshi_admin_secret(),
+        &[],
+        false,
+    )
+    .await?;
+    Ok("♻ Reset ALL members to the starting balance on both sims.".to_string())
+}
+
+/// Permanently delete a member from both sims.
+async fn remove_member(username: &str) -> Result<String> {
+    post_admin(
+        format!("{}/admin/delete-user", poly_url()),
+        "X-Admin-Secret",
+        admin_secret(),
+        &[("username", username)],
+        true,
+    )
+    .await?;
+    post_admin(
+        format!("{}/trade-api/v2/admin/delete-user", kalshi_url()),
+        "X-Kalshi-Sim-Admin",
+        kalshi_admin_secret(),
+        &[("username", username)],
+        true,
+    )
+    .await?;
+    Ok(format!("🗑 Removed {username} from both sims and the roster."))
 }
 
 fn issue_and_save(app: &mut App, rt: &Runtime, conn: &Connection) {
@@ -744,7 +929,7 @@ fn fmt_money(v: f64) -> String {
 fn render_footer(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
     let help = match app.view {
         View::Issue => "Tab next · ←/→ role · Enter issue · Esc quit",
-        View::Roster => "Tab next · ↑/↓ select · c copy creds · q/Esc quit",
+        View::Roster => "Tab · ↑/↓ select · c copy · r reset · x remove · R reset-all · q quit",
         View::Leaderboard => "Tab next · r refresh · q/Esc quit",
     };
     let footer = Paragraph::new(vec![

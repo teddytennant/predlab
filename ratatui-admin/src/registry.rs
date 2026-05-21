@@ -93,6 +93,13 @@ pub fn save_student(conn: &Connection, s: &Student) -> Result<()> {
     Ok(())
 }
 
+/// Remove a student from the roster by username. Returns true if a row was deleted.
+/// (The simulators own the real accounts; this only forgets the local key record.)
+pub fn delete_student(conn: &Connection, username: &str) -> Result<bool> {
+    let n = conn.execute("DELETE FROM students WHERE username = ?1", params![username])?;
+    Ok(n > 0)
+}
+
 /// All students, newest first (then alphabetical) for stable display.
 pub fn list_students(conn: &Connection) -> Result<Vec<Student>> {
     let mut stmt = conn.prepare(
@@ -166,6 +173,20 @@ mod tests {
         let all = list_students(&conn).unwrap();
         assert_eq!(all.len(), 1, "username is the primary key, no duplicate row");
         assert_eq!(all[0].poly_key, "pm_paper_bob_rotated");
+    }
+
+    #[test]
+    fn delete_removes_only_the_named_student() {
+        let conn = open_in_memory().unwrap();
+        save_student(&conn, &student("alice")).unwrap();
+        save_student(&conn, &student("bob")).unwrap();
+
+        assert!(delete_student(&conn, "alice").unwrap(), "deleted an existing row");
+        let all = list_students(&conn).unwrap();
+        assert_eq!(all.len(), 1);
+        assert_eq!(all[0].username, "bob");
+
+        assert!(!delete_student(&conn, "nobody").unwrap(), "no row to delete -> false");
     }
 
     #[test]

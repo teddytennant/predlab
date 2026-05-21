@@ -130,3 +130,19 @@ def reset_orderbook(token_id: str | None = None) -> None:
         _order_books.pop(token_id, None)
     else:
         _order_books.clear()
+
+
+def remove_user_orders(user_id: int) -> int:
+    """Drop all of a user's resting entries from every book (admin reset/delete).
+
+    The book is in-memory and survives a DB row delete, so we must purge it too
+    or the user's cancelled/deleted orders would keep matching. Returns the count
+    of entries removed.
+    """
+    removed = 0
+    for book in _order_books.values():
+        kept_bids = [e for e in book.bids if e.user_id != user_id]
+        kept_asks = [e for e in book.asks if e.user_id != user_id]
+        removed += (len(book.bids) - len(kept_bids)) + (len(book.asks) - len(kept_asks))
+        book.bids, book.asks = kept_bids, kept_asks
+    return removed

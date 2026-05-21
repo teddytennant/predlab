@@ -147,14 +147,18 @@ async def get_fills(
 @router.post("/admin/reset-user")
 async def admin_reset(
     request: Request,
-    username: str = Query(..., description="username to reset"),
+    username: str | None = Query(None, description="username to reset; omit to reset everyone"),
     db=Depends(get_db),
     access_key: str = Header(None, alias="KALSHI-ACCESS-KEY"),
     signature: str = Header(None, alias="KALSHI-ACCESS-SIGNATURE"),
     timestamp: str = Header(None, alias="KALSHI-ACCESS-TIMESTAMP"),
     admin_secret: str = Header(None, alias="X-Kalshi-Sim-Admin"),
 ):
-    """Reset a paper account to starting balance, cancel its orders, zero positions (admin)."""
+    """Reset to starting balance, cancel orders, zero positions (admin).
+
+    Pass ``username`` to reset one member, or omit it to reset everyone (e.g.
+    before a new competition).
+    """
     rank = resolve_admin_rank(
         db, "POST", request.url.path, access_key, signature, timestamp, admin_secret
     )
@@ -162,9 +166,32 @@ async def admin_reset(
         raise HTTPException(403, "requires an admin key or the club admin secret")
     svc = get_paper_service(db)
     try:
-        return svc.admin_reset_user(username)
+        return svc.admin_reset_user(username) if username else svc.admin_reset_all()
     except Exception as e:
         raise HTTPException(400, str(e))  # noqa: B904
+
+
+@router.post("/admin/delete-user")
+async def admin_delete(
+    request: Request,
+    username: str = Query(..., description="username to permanently remove"),
+    db=Depends(get_db),
+    access_key: str = Header(None, alias="KALSHI-ACCESS-KEY"),
+    signature: str = Header(None, alias="KALSHI-ACCESS-SIGNATURE"),
+    timestamp: str = Header(None, alias="KALSHI-ACCESS-TIMESTAMP"),
+    admin_secret: str = Header(None, alias="X-Kalshi-Sim-Admin"),
+):
+    """Permanently remove a member and all their data — they left the club (admin)."""
+    rank = resolve_admin_rank(
+        db, "POST", request.url.path, access_key, signature, timestamp, admin_secret
+    )
+    if rank < ROLE_RANK["admin"]:
+        raise HTTPException(403, "requires an admin key or the club admin secret")
+    svc = get_paper_service(db)
+    try:
+        return svc.admin_delete_user(username)
+    except ValueError as e:
+        raise HTTPException(404, str(e))  # noqa: B904
 
 
 @router.post("/admin/resolve/{ticker}")
