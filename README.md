@@ -14,14 +14,13 @@ Refreshed hourly from the live club server.
 
 <!-- LEADERBOARD:START -->
 
-_Auto-updated 2026-05-21 12:44 UTC — combined paper net worth across both simulators._
+_Auto-updated 2026-05-21 18:58 UTC — combined paper net worth across both simulators._
 
 | # | Member | Polymarket | Kalshi | Total |
 |--:|:-------|-----------:|-------:|------:|
 | 🥇 | club_admin | $25,000.00 | $25,000.00 | **$50,000.00** |
-| 🥈 | username | $25,000.00 | $25,000.00 | **$50,000.00** |
-| 🥉 | trump | $25,000.00 | $25,000.00 | **$50,000.00** |
-| 4 | demo_trader | $25,000.00 | $0.00 | **$25,000.00** |
+| 🥈 | Teddy | $25,000.00 | $25,000.00 | **$50,000.00** |
+| 🥉 | demo_trader | $25,000.00 | $0.00 | **$25,000.00** |
 
 <!-- LEADERBOARD:END -->
 
