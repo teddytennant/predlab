@@ -46,3 +46,22 @@ jobs:
         run: cargo test
       - name: Clippy
         run: cargo clippy -- -D warnings
+
+  leaderboard:
+    name: leaderboard-rs (cargo test)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: leaderboard-rs
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: leaderboard-rs
+      - name: Test
+        run: cargo test
+      - name: Clippy
+        run: cargo clippy -- -D warnings

@@ -49,7 +49,7 @@ print(kal.positions())
 
 Prices are in dollars from 0 to 1 (a contract pays out $1 if it resolves your way). Both
 platforms start you at **$25,000 of paper money**. Your combined net worth shows up on the
-[club leaderboard](../README.md#-leaderboard).
+[club leaderboard](https://predlab.teddytennant.com).
 
 > Want the real thing instead? The official **Kalshi Python SDK** also works — point it at
 > `https://kalshi.teddytennant.com/trade-api/v2` with your key id and `.pem`. Polymarket is

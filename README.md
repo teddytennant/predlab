@@ -10,19 +10,8 @@ and you trade against the club's hosted servers.
 
 ## 🏆 Leaderboard
 
-Refreshed hourly from the live club server.
-
-<!-- LEADERBOARD:START -->
-
-_Auto-updated 2026-05-21 18:58 UTC — combined paper net worth across both simulators._
-
-| # | Member | Polymarket | Kalshi | Total |
-|--:|:-------|-----------:|-------:|------:|
-| 🥇 | club_admin | $25,000.00 | $25,000.00 | **$50,000.00** |
-| 🥈 | Teddy | $25,000.00 | $25,000.00 | **$50,000.00** |
-| 🥉 | demo_trader | $25,000.00 | $0.00 | **$25,000.00** |
-
-<!-- LEADERBOARD:END -->
+**[predlab.teddytennant.com](https://predlab.teddytennant.com)** — live combined net-worth
+standings across both simulators, updated automatically.
 
 ## Getting started
 
@@ -55,7 +44,8 @@ both platforms (and does Kalshi's fiddly request-signing for you), so you don't 
    kal.create_order(ticker="<TICKER>", side="bid", count=10, price=0.65)
    ```
 
-3. **Climb the [leaderboard](#-leaderboard).** Your combined net worth updates automatically.
+3. **Climb the [leaderboard](https://predlab.teddytennant.com).** Your combined net worth
+   updates automatically.
 
 Full walkthrough: [`examples/README.md`](examples/README.md). Prefer `curl` or the official
 SDKs instead? The base URLs and per-platform details are below.
@@ -109,9 +99,9 @@ Keep your `.pem` file private — anyone who has it can trade as you.
 
 ### Your standings
 
-Your **net worth** is your cash plus any open positions marked to the current price. The
-leaderboard at the top of this page combines both platforms and refreshes hourly; the
-`predlab` admin tool shows the same standings live.
+Your **net worth** is your cash plus any open positions marked to the current price. The live
+leaderboard at **[predlab.teddytennant.com](https://predlab.teddytennant.com)** combines both
+platforms and updates automatically.
 
 Made a mess of your account? An admin can reset you back to the starting $25,000 anytime —
 just ask.
@@ -127,7 +117,9 @@ just ask.
 predlab/
 ├── polymarket-sim/   # Polymarket Gamma + CLOB API mock (Python / FastAPI)   :8001
 ├── kalshi-sim/       # Kalshi Trade API v2 mock        (Python / FastAPI)    :8002
+├── leaderboard-rs/   # Public live leaderboard page    (Rust / axum)         :8003
 ├── ratatui-admin/    # Admin TUI (Rust): issue dual keys + club roster
+├── examples/         # Member starter-kit client (predlab.py)
 ├── docker-compose.yml
 └── Makefile
 ```
@@ -208,7 +200,9 @@ Add `&role=admin` (owner only) to mint an admin key.
 
 `GET /admin/leaderboard` (Polymarket) and `GET /trade-api/v2/admin/leaderboard` (Kalshi)
 return every member ranked by paper net worth (cash + open positions marked to current
-price). Both are admin-gated; the TUI's Leaderboard tab merges them into one ranking.
+price). Both are admin-gated; the TUI's Leaderboard tab merges them into one ranking, and the
+`leaderboard-rs/` service renders the same combined ranking as the public page at
+[predlab.teddytennant.com](https://predlab.teddytennant.com).
 
 Resets and removals (admin-gated; the `predlab` TUI fires each on both sims at once):
 

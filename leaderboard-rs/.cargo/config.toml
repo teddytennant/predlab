@@ -1,0 +1,7 @@
+# NixOS workaround: the rustup stable toolchain ships a self-contained `ld.lld`
+# whose wrapper points at a garbage-collected /nix/store path, so the default
+# linker fails ("ld-wrapper.sh: No such file or directory"). Force the GNU
+# linker driver (gcc + system bfd ld) and disable lld. Also valid in the
+# rust:bookworm Docker image (gcc is present), so it builds everywhere.
+[target.x86_64-unknown-linux-gnu]
+rustflags = ["-C", "linker=gcc", "-C", "linker-features=-lld", "-C", "link-self-contained=-linker"]
