@@ -8,11 +8,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libpq-dev \
     && rm -rf /var/lib/apt/lists/*
 
-# Install dependencies first for layer caching (source comes in via PYTHONPATH below)
-COPY pyproject.toml ./
-RUN pip install --no-cache-dir -e ".[dev]" || pip install --no-cache-dir .
-
+# Copy the full project before installing: pyproject sets readme = "README.md"
+# and finds packages under src/, so both must be present when the build backend
+# resolves metadata (a pyproject-only copy fails at "getting requirements").
 COPY . .
+RUN pip install --no-cache-dir -e ".[dev]"
 
 ENV PYTHONPATH=/app/src
 ENV DATABASE_URL=sqlite:///./data/kalshi.db
