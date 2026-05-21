@@ -1,72 +1,79 @@
 # PredLab
 
-**PredLab** is the unified tooling and paper trading environment for the school Prediction Markets Club.
+**PredLab** is the unified paper-trading environment for the school Prediction Markets Club.
 
-Students can practice real trading strategies on **both** Polymarket-style and Kalshi-style markets using paper money, while the club admins have powerful tools for onboarding, oversight, and teaching.
+Students practice real trading strategies on **both** Polymarket-style and Kalshi-style
+markets using paper money, while club admins get a fast terminal tool for onboarding and
+oversight. Everything is one repo.
 
-## Repository Structure
+> **PAPER TRADING ONLY — NOT AFFILIATED WITH POLYMARKET OR KALSHI.** Educational use.
+
+## Repository structure
 
 ```
 predlab/
-├── polymarket-sim/       # Full mock of Polymarket's Gamma + CLOB APIs
-├── kalshi-sim/           # Full mock of Kalshi's Trade API v2
-├── src/
-│   └── predlab/          # The PredLab TUI (admin + student overview)
-│       ├── cli.py
-│       └── tui.py
-├── docker-compose.yml    # One-command startup for both simulators
-├── pyproject.toml        # Makes `predlab` an installable command
-└── README.md
+├── polymarket-sim/   # Polymarket Gamma + CLOB API mock (Python / FastAPI)   :8001
+├── kalshi-sim/       # Kalshi Trade API v2 mock        (Python / FastAPI)    :8002
+├── ratatui-admin/    # Admin TUI (Rust): issue dual keys + club roster
+├── docker-compose.yml
+└── Makefile
 ```
 
-## Quick Start
+The two simulators sync live prices from the real public APIs and expose drop-in–compatible
+endpoints, so students point the official SDKs at `localhost` and only change the base URL.
 
-### 1. Start both simulators
+## Quick start
+
+### 1. Run the simulators
 
 ```bash
-docker compose up --build
+docker compose up --build      # Polymarket -> :8001, Kalshi -> :8002
 ```
 
-- Polymarket simulator → http://localhost:8001
-- Kalshi simulator → http://localhost:8002
-
-### 2. Install the PredLab TUI (recommended)
-
-From the repo root:
+Or run one directly for development:
 
 ```bash
-pip install -e .
+cd polymarket-sim && pip install -e ".[dev]" && uvicorn polymarket_sim.main:app --port 8001
+cd kalshi-sim     && pip install -e ".[dev]" && uvicorn kalshi_sim.main:app     --port 8002
 ```
 
-Then just run:
+### 2. Build the admin TUI
 
 ```bash
-predlab
+make install-admin     # cargo install --path ratatui-admin  -> `predlab` on your PATH
+predlab                # or: make admin
 ```
 
-The TUI supports two modes:
-- **Admin mode** (press Enter at the key prompt) — create students, issue dual keys, resets, force resolves, etc.
-- **Student / Read-only mode** (paste a paper key) — Club Overview + Leaderboard only.
+The TUI has two views (`Tab` to switch):
+- **Issue keys** — type a username, `Enter` mints paper keys on *both* simulators and saves
+  the member to the roster.
+- **Roster** — the club's students from `~/.predlab/students.db`.
 
-## Student Experience
+Configure endpoints/secret via env vars: `POLY_URL`, `KALSHI_URL`, `PREDLAB_ADMIN_SECRET`
+(the Polymarket admin endpoint is gated by `X-Admin-Secret`).
 
-When an admin creates a student in `predlab`, the student receives:
-- One username
-- A key for the Polymarket simulator
-- A key for the Kalshi simulator
+## Testing
 
-They can then:
-- Point the official SDKs at either simulator
-- Trade paper money on either (or both) platforms
-- Use the `predlab` TUI in read-only mode to see the club leaderboard and overview
+```bash
+make test          # runs all three suites
+# or individually:
+make test-sims     # pytest for both simulators
+make test-admin    # cargo test for the admin tool
+```
 
-## Philosophy
+The simulator tests run fully offline (isolated temp SQLite, no live network sync). See
+each project's `tests/` for details.
 
-- Real APIs → Students build against the actual SDKs with only the base URL changed.
-- Paper money only → Zero financial risk.
-- One identity across platforms → Students can experiment with strategies on both market designs.
-- Admin tooling that doesn't get in the way of students.
+## Student experience
 
----
+Each student gets one username and a paper key per platform, then:
+- points the official Polymarket/Kalshi SDKs at the sims (base-URL override),
+- trades paper money on either or both market designs,
+- competes on the club leaderboard.
 
-For club admins: run `predlab` and choose the admin path. All student management and oversight lives there.
+## Deploying for the club
+
+Before exposing this publicly: set real admin secrets (`ADMIN_SECRET`,
+`CLUB_ADMIN_SECRET`), turn off the Kalshi auth bypass (`DEV_BYPASS_AUTH=false`), and tighten
+CORS. A Cloudflare Tunnel from the host plus a `systemd` service per simulator is the
+simplest way to put `:8001`/`:8002` behind your domain with HTTPS.

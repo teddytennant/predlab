@@ -1,12 +1,7 @@
-.PHONY: help install dev up down tui logs clean lint
+.PHONY: help up down logs clean test test-sims test-admin lint admin install-admin
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-15s\033[0m %s\n", $$1, $$2}'
-
-install: ## Install the PredLab TUI in editable mode
-	pip install -e ".[dev]"
-
-dev: install up ## Install + start both simulators
 
 up: ## Start both simulators with Docker Compose
 	docker compose up -d --build
@@ -14,18 +9,32 @@ up: ## Start both simulators with Docker Compose
 down: ## Stop all services
 	docker compose down
 
-tui: ## Run the PredLab admin TUI
-	predlab
-
 logs: ## Follow logs from both simulators
 	docker compose logs -f
 
-clean: ## Remove containers, volumes, and Python cache
+admin: ## Run the Rust admin TUI (against running sims)
+	cd ratatui-admin && cargo run --release
+
+install-admin: ## Install the `predlab` admin binary onto your PATH
+	cd ratatui-admin && cargo install --path .
+
+test: test-sims test-admin ## Run every test suite (both sims + admin)
+
+test-sims: ## Run the Python simulator test suites
+	cd polymarket-sim && python -m pytest -q
+	cd kalshi-sim && python -m pytest -q
+
+test-admin: ## Run the Rust admin test suite
+	cd ratatui-admin && cargo test
+
+lint: ## Run linters across the repo
+	cd polymarket-sim && ruff check src/ tests/
+	cd kalshi-sim && ruff check src/ tests/
+	cd ratatui-admin && cargo clippy --quiet
+
+clean: ## Remove containers, volumes, and caches
 	docker compose down -v
 	find . -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true
 	find . -type d -name ".pytest_cache" -exec rm -rf {} + 2>/dev/null || true
 	find . -type d -name ".ruff_cache" -exec rm -rf {} + 2>/dev/null || true
-
-lint: ## Run linters
-	ruff check src/
-	ruff format --check src/
+	cd ratatui-admin && cargo clean 2>/dev/null || true
