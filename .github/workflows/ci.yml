@@ -1,0 +1,48 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  simulators:
+    name: ${{ matrix.sim }} (pytest + ruff)
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        sim: [polymarket-sim, kalshi-sim]
+    defaults:
+      run:
+        working-directory: ${{ matrix.sim }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install
+        run: pip install -e ".[dev]"
+      - name: Lint
+        run: ruff check src/ tests/
+      - name: Test
+        run: pytest -q
+
+  admin:
+    name: ratatui-admin (cargo test)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ratatui-admin
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: ratatui-admin
+      - name: Test
+        run: cargo test
+      - name: Clippy
+        run: cargo clippy -- -D warnings
