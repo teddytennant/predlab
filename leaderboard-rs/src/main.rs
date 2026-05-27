@@ -80,6 +80,7 @@ async fn main() -> Result<()> {
     let state = AppState::from_env();
     let app = Router::new()
         .route("/", get(index))
+        .route("/start", get(start))
         .route("/predlab.py", get(client_py))
         .route("/healthz", get(|| async { "ok" }))
         .with_state(state);
@@ -113,6 +114,11 @@ async fn index(State(st): State<AppState>) -> Html<String> {
         c.at = Some(Instant::now());
     }
     Html(html)
+}
+
+/// Standalone onboarding / download page.
+async fn start() -> Html<String> {
+    Html(render_start_page())
 }
 
 /// Serve the embedded member client as a file download.
@@ -273,6 +279,7 @@ pre.board {
 }
 .dim { color: #666; }
 a { color: #8ab4ff; }
+.nav { margin: 0; font-size: 14px; }
 .onboard { font-size: 14px; line-height: 1.55; }
 .onboard h2 { font-size: 14px; font-weight: normal; margin: 0 0 12px; }
 .onboard ol { margin: 0; padding-left: 1.5em; }
@@ -292,10 +299,10 @@ pre.snippet {
 @media (max-width: 640px) { pre.board { font-size: 11px; } }
 "#;
 
-/// Onboarding block shown under the board: how a student goes from zero to
-/// trading, with a one-click download of the client served from this domain.
+/// The standalone get-started page: how a student goes from zero to trading,
+/// with a one-click download of the client served from this domain.
 const ONBOARD: &str = r##"<section class="onboard">
-<h2><span class="dim">$</span> new here? start trading in 4 steps</h2>
+<h2><span class="dim">$</span> get started — trade in 4 steps</h2>
 <ol>
 <li>Ask a club admin for your <strong>API key</strong> (it looks like <code>pm_paper_…</code>). You start with $25,000 of paper money.</li>
 <li>Download the one-file client:<a class="btn" href="/predlab.py" download="predlab.py">⬇ predlab.py</a></li>
@@ -310,9 +317,37 @@ yes_token = poly.markets(limit=1)[0]["clobTokenIds"][0]
 poly.place_order(token_id=yes_token, side="BUY", price=0.55, size=10)
 print(poly.positions())                          # what you now hold</pre>
 <p class="dim">paper trading only · full step-by-step guide → <a href="https://github.com/teddytennant/predlab#getting-started-members">github.com/teddytennant/predlab</a></p>
-</section>"##;
+</section>
+<p class="nav"><a href="/">← back to leaderboard</a></p>"##;
 
-/// Wrap a pre-rendered table (or message) in the terminal-style page chrome.
+/// Full HTML document with the shared terminal styling. `refresh` adds a
+/// meta-refresh (the auto-updating leaderboard uses it; the start page omits it).
+fn document(title: &str, refresh: Option<u32>, body: &str) -> String {
+    let refresh_tag = match refresh {
+        Some(s) => format!("<meta http-equiv=\"refresh\" content=\"{s}\">"),
+        None => String::new(),
+    };
+    format!(
+        r#"<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+{refresh_tag}
+<title>{title}</title>
+<style>{style}</style>
+</head>
+<body><main>{body}</main></body>
+</html>"#,
+        refresh_tag = refresh_tag,
+        title = esc(title),
+        style = STYLE,
+        body = body,
+    )
+}
+
+/// Wrap a pre-rendered table (or message) in the leaderboard page chrome, with
+/// a link out to the get-started page.
 fn page_shell(table_text: &str) -> String {
     let board = format!(
         "<span class=\"dim\">$</span> predlab leaderboard\n\n{}\n\n\
@@ -320,23 +355,17 @@ fn page_shell(table_text: &str) -> String {
         esc(table_text),
         REFRESH_SECS,
     );
-    format!(
-        r#"<!doctype html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<meta http-equiv="refresh" content="{refresh}">
-<title>predlab · leaderboard</title>
-<style>{style}</style>
-</head>
-<body><main><pre class="board">{board}</pre>{onboard}</main></body>
-</html>"#,
-        refresh = REFRESH_SECS,
-        style = STYLE,
+    let body = format!(
+        "<pre class=\"board\">{board}</pre>\n\
+         <p class=\"nav\">new here? <a href=\"/start\">→ get your key &amp; start trading</a></p>",
         board = board,
-        onboard = ONBOARD,
-    )
+    );
+    document("predlab · leaderboard", Some(REFRESH_SECS), &body)
+}
+
+/// The standalone onboarding / download page.
+fn render_start_page() -> String {
+    document("predlab · get started", None, ONBOARD)
 }
 
 fn render_page(rows: &[Leader]) -> String {
@@ -400,12 +429,23 @@ mod tests {
     }
 
     #[test]
-    fn page_has_onboarding_and_download_button() {
+    fn leaderboard_links_to_start_page() {
         let html = render_page(&[leader("alice", 25000.0)]);
-        assert!(html.contains("start trading in 4 steps"));
+        assert!(html.contains(r#"href="/start""#));
+        // onboarding itself is NOT on the board page anymore
+        assert!(!html.contains("pip install requests"));
+    }
+
+    #[test]
+    fn start_page_has_onboarding_and_download_button() {
+        let html = render_start_page();
+        assert!(html.contains("get started"));
         assert!(html.contains(r#"href="/predlab.py""#));
         assert!(html.contains("download=\"predlab.py\""));
         assert!(html.contains("pip install requests"));
+        assert!(html.contains(r#"href="/""#)); // back to leaderboard
+        // the standalone page should not auto-refresh
+        assert!(!html.contains("http-equiv=\"refresh\""));
     }
 
     #[test]
