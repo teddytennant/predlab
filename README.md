@@ -10,58 +10,121 @@ Trade on Polymarket-style markets with fake money, practice real strategies, and
 
 **[predlab.teddytennant.com](https://predlab.teddytennant.com)** — live paper net-worth standings, updated automatically.
 
-## Getting started
+## Getting started (members)
 
-There are no servers for you to run. A club admin sets you up with:
+You don't run or install any servers. Ask a club admin for two things:
 
-- a **username**, and
-- a **Polymarket API key** (a string you send as the `POLY_API_KEY` header).
+- your **username**, and
+- your **API key** — a string like `pm_paper_xxxxxxxx`. You send it as the `POLY_API_KEY` header on every request that touches your account.
 
-Everyone starts with **$25,000 of paper money**, traded against the club's hosted server at `https://poly.teddytennant.com`.
+Everyone starts with **$25,000 of paper money** and trades against the club's hosted server at **`https://poly.teddytennant.com`**. It's fake money — experiment freely.
 
-### Trading in 3 steps — download one file
+> **New to prediction markets?** A market asks a yes/no question ("Will X happen?"). You buy **YES** or **NO** shares priced between **$0.01 and $0.99** — the price *is* the market's estimated probability. Each winning share pays out **$1.00** when the market resolves; losers pay $0. Buy low on an outcome you believe in, and you profit if you're right.
 
-The whole client is a single file, [`examples/predlab.py`](examples/predlab.py). It talks to the Polymarket-style sim so you don't need any SDK.
+### Step 1 — Get the client
 
-1. **Download** [`examples/predlab.py`](examples/predlab.py) and `pip install requests`.
-2. **Paste in your key** and trade:
-
-   ```python
-   from predlab import PolymarketClient
-
-   poly = PolymarketClient(api_key="pm_paper_...")           # your key
-   print(poly.markets(limit=5))                              # browse markets
-   poly.place_order(token_id="<token>", side="BUY", price=0.55, size=10)
-   print(poly.positions())
-   ```
-
-3. **Climb the [leaderboard](https://predlab.teddytennant.com).** Your net worth updates automatically.
-
-Full walkthrough: [`examples/README.md`](examples/README.md). Prefer `curl`? See the curl examples below.
-
-**What needs your key:**
-
-- **No key needed** — public market data: `GET /markets`, `GET /book`, `GET /midpoint`, etc.
-- **Needs your key** — anything touching *your account*: orders, positions, balance (`401` otherwise).
-
-### Quick curl examples (Polymarket style)
+The entire client is a single file: [`examples/predlab.py`](examples/predlab.py). Download it and install its one dependency:
 
 ```bash
-# 1. See markets (no key)
-curl https://poly.teddytennant.com/markets
-
-# 2. Place an order
-curl -X POST https://poly.teddytennant.com/order \
-  -H "POLY_API_KEY: <your_api_key>" -H "Content-Type: application/json" \
-  -d '{"token_id":"<token>","side":"BUY","price":0.55,"size":10}'
-
-# 3. Check positions
-curl https://poly.teddytennant.com/positions -H "POLY_API_KEY: <your_api_key>"
+pip install requests
+# save examples/predlab.py in the folder you'll work from
 ```
 
-(`Authorization: Bearer <key>` also works.)
+(No Python? Skip to the [curl section](#prefer-curl-or-another-language) — any HTTP tool works.)
 
-Made a mess? Ask an admin to reset your balance to the starting $25,000.
+### Step 2 — Plug in your key
+
+In a Python shell or script **in the same folder** as `predlab.py`:
+
+```python
+from predlab import PolymarketClient
+
+poly = PolymarketClient(api_key="pm_paper_REPLACE_ME")   # the key your admin gave you
+```
+
+`poly` now talks to the club server. (To point at a local sim instead, set the `POLY_BASE` environment variable.)
+
+### Step 3 — Browse markets and grab a token
+
+You trade **outcome tokens**, not markets. Every market has a `clobTokenIds` list: index **`0` = YES**, index **`1` = NO**. You need one of those token ids to place an order.
+
+```python
+markets = poly.markets(limit=5)        # browsing needs no key
+m = markets[0]
+print(m["question"])                   # "Will ... ?"
+print(m["bestBid"], m["bestAsk"])      # current market price (0–1)
+
+yes_token = m["clobTokenIds"][0]       # the YES outcome token
+no_token  = m["clobTokenIds"][1]       # the NO outcome token
+```
+
+### Step 4 — Place an order
+
+`price` is the per-share cost between **0.01 and 0.99**; `size` is the number of shares.
+
+```python
+# "YES looks underpriced — buy 10 shares at 55¢"
+resp = poly.place_order(token_id=yes_token, side="BUY", price=0.55, size=10)
+print(resp)   # {'success': True, 'orderID': '...', 'status': 'open' | 'filled' | 'partial'}
+```
+
+Check the `status` it returns:
+
+- **`filled`** — matched immediately; you now hold the shares.
+- **`open`** — your order is resting on the book, waiting for another member to take the other side.
+- **`partial`** — part filled, the rest is resting.
+
+> **Why might my order sit `open`?** The order book is shared by the whole club and there's **no house market-maker** — your order only fills when *another member* trades against it. Early in a competition the book can be thin, so orders may wait. To fill faster, **buy near `bestAsk`** (or **sell near `bestBid`**) to cross the spread.
+
+To sell shares you hold, pass `side="SELL"`.
+
+### Step 5 — Check your account
+
+```python
+print(poly.positions())   # the shares you hold + unrealized profit/loss
+```
+
+For your cash and total net worth (the number that ranks you):
+
+```bash
+curl https://poly.teddytennant.com/portfolio -H "POLY_API_KEY: pm_paper_REPLACE_ME"
+# -> {"cash": 24994.5, "positions_value": 5.5, "net_worth": 25000.0}
+```
+
+**Net worth = free cash + your positions marked at the current market price.** That's your leaderboard score.
+
+### Step 6 — Climb the leaderboard
+
+Watch your standing at **[predlab.teddytennant.com](https://predlab.teddytennant.com)** — it refreshes automatically.
+
+### Prefer curl or another language?
+
+Any HTTP client works. Send your key in the `POLY_API_KEY` header (`Authorization: Bearer <key>` also works):
+
+```bash
+# Browse markets — no key needed
+curl "https://poly.teddytennant.com/markets?limit=5"
+
+# Place an order — needs your key (token_id comes from a market's clobTokenIds)
+curl -X POST https://poly.teddytennant.com/order \
+  -H "POLY_API_KEY: pm_paper_REPLACE_ME" -H "Content-Type: application/json" \
+  -d '{"token_id":"<token>","side":"BUY","price":0.55,"size":10}'
+
+# Your positions and portfolio
+curl https://poly.teddytennant.com/positions -H "POLY_API_KEY: pm_paper_REPLACE_ME"
+curl https://poly.teddytennant.com/portfolio -H "POLY_API_KEY: pm_paper_REPLACE_ME"
+```
+
+**Key needed** for anything touching your account (orders, positions, portfolio, balance) — without it you get `401`. **No key** for public market data (`/markets`, `/book`, `/midpoint`, `/spread`, `/last-trade-price`).
+
+### Troubleshooting
+
+| Symptom | What it means / fix |
+|---|---|
+| `401 Unauthorized` | Key missing, mistyped, or revoked. Re-check the `POLY_API_KEY` header or ask your admin. |
+| Order stays `open`, never fills | No one has taken the other side yet. Move your price toward `bestBid`/`bestAsk`, or wait for club activity. |
+| `unknown token` error | You passed a market `id` — use a value from that market's `clobTokenIds` instead. |
+| Wrecked your balance | Ask an admin to reset you to the starting **$25,000**. |
 
 ---
 
