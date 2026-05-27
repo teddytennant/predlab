@@ -46,7 +46,7 @@
 )
 
 // ---- list styling ----
-#set list(marker: text(fill: accent, "▸"), spacing: 0.9em, indent: 2pt)
+#set list(marker: text(fill: muted)[–], spacing: 0.9em, indent: 2pt)
 
 // =======================================================================
 // SLIDE HELPERS
@@ -73,9 +73,9 @@
   body
 }
 
-#let card(title, body, fill: lightbg, edge: accent) = block(
-  width: 100%, fill: fill, inset: 13pt, radius: 7pt,
-  stroke: (left: 3.5pt + edge),
+#let card(title, body) = block(
+  width: 100%, fill: lightbg, inset: 13pt, radius: 6pt,
+  stroke: 0.6pt + line-grey,
   {
     text(weight: "bold", size: 16pt, fill: navy, title)
     v(5pt)
@@ -84,12 +84,9 @@
   },
 )
 
-#let chip(c) = box(fill: accent, inset: (x: 7pt, y: 3pt), radius: 20pt,
-  text(fill: white, size: 11pt, weight: "bold", c))
-
 #let bigstat(num, label) = block(
-  width: 100%, height: 3.6cm, fill: rgb("#eef5ff"), inset: 14pt, radius: 7pt,
-  stroke: (left: 3.5pt + accent),
+  width: 100%, height: 3.6cm, fill: lightbg, inset: 14pt, radius: 6pt,
+  stroke: 0.6pt + line-grey,
   align(center + horizon)[
     #text(size: 34pt, weight: "black", fill: navy, num)
     #v(3pt)
@@ -136,9 +133,9 @@
   #grid(
     columns: (1fr, 1fr, 1fr),
     gutter: 14pt,
-    card([📈 Trade], [Everyone gets *\$25,000 paper.* Buy & sell YES/NO shares on markets priced from live data.]),
-    card([⚙ Build], [Trade through code against *PredLab*, our faithful mock of Polymarket's real APIs.]),
-    card([🤖 Automate], [Bots and AI agents are *first-class competitors.* No real money, ever.]),
+    card([Trade], [Everyone gets *\$25,000 paper.* Buy & sell YES/NO shares on markets priced from live data.]),
+    card([Build], [Trade through code against *PredLab*, our faithful mock of Polymarket's real APIs.]),
+    card([Automate], [Bots and AI agents are *first-class competitors.* No real money, ever.]),
   )
   #v(16pt)
   #align(center, text(size: 14pt, fill: muted)[
@@ -170,7 +167,6 @@
       #v(4pt)
       Believe it's *higher?* Buy YES.\
       Believe it's *lower?* Buy NO.],
-      fill: rgb("#eef5ff"),
     )),
   )
 ]
@@ -188,13 +184,13 @@
 
       #v(6pt)
       You buy *100 YES shares* for *\$55.*
-    ], fill: rgb("#eef5ff")),
+    ]),
     card([The outcome], [
-      ✅ Resolves *YES* → 100 × \$1.00 = *\$100* → *+\$45 profit.*
+      *If it resolves YES* → 100 × \$1.00 = *\$100* → *+\$45 profit.*
 
       #v(6pt)
-      ❌ Resolves *NO* → shares worth *\$0* → *−\$55.*
-    ], fill: rgb("#fff7ed"), edge: rgb("#c2772a")),
+      *If it resolves NO* → shares worth *\$0* → *−\$55.*
+    ]),
   )
   #v(18pt)
   #align(center, text(size: 19pt, fill: navy, weight: "bold")[
@@ -263,7 +259,6 @@
       #v(4pt)
       That one number ranks you. Everyone starts equal at *\$25,000.*
     ]),
-    fill: rgb("#eef5ff"),
   ))
 ]
 
@@ -320,7 +315,7 @@
 #darkslide[
   #v(1fr)
   #align(center)[
-    #chip("AI POLICY")
+    #text(size: 13pt, tracking: 4pt, weight: "bold", fill: accent2)[AI POLICY]
     #v(16pt)
     #text(size: 40pt, weight: "black")[Unrestricted. Encouraged.]
     #v(16pt)
@@ -361,8 +356,8 @@
   #grid(
     columns: (1fr, 1fr),
     gutter: 16pt,
-    card([🚀 Autonomous trader], [Grok surveys markets, forms a thesis, sizes a position, and places paper orders *on its own* — then reviews fills and P&L and adjusts. A hands-off leaderboard competitor.]),
-    card([🧭 Research copilot], [Interactively weighs the order book and current events against its own probability estimate, then *recommends* trades a human approves. A forecasting partner, not autopilot.]),
+    card([Autonomous trader], [Grok surveys markets, forms a thesis, sizes a position, and places paper orders *on its own* — then reviews fills and P&L and adjusts. A hands-off leaderboard competitor.]),
+    card([Research copilot], [Interactively weighs the order book and current events against its own probability estimate, then *recommends* trades a human approves. A forecasting partner, not autopilot.]),
   )
   #v(12pt)
   #align(center, text(size: 14pt, fill: muted, style: "italic")[
@@ -379,10 +374,10 @@
     columns: (auto, 1fr),
     row-gutter: 18pt,
     column-gutter: 16pt,
-    chip("1"), text(size: 19pt)[Ask an officer for a *username* and an *API key* (`pm_paper_…`).],
-    chip("2"), text(size: 19pt)[Download `predlab.py` and `pip install requests`.],
-    chip("3"), text(size: 19pt)[Plug in your key, browse markets, and place your first paper order.],
-    chip("4"), text(size: 19pt)[Watch your net worth on *predlab.teddytennant.com* — and start automating.],
+    text(size: 19pt, weight: "bold", fill: accent)[1.], text(size: 19pt)[Ask an officer for a *username* and an *API key* (`pm_paper_…`).],
+    text(size: 19pt, weight: "bold", fill: accent)[2.], text(size: 19pt)[Download `predlab.py` and `pip install requests`.],
+    text(size: 19pt, weight: "bold", fill: accent)[3.], text(size: 19pt)[Plug in your key, browse markets, and place your first paper order.],
+    text(size: 19pt, weight: "bold", fill: accent)[4.], text(size: 19pt)[Watch your net worth on *predlab.teddytennant.com* — and start automating.],
   )
   #v(20pt)
   #align(center, text(size: 16pt, fill: muted)[
@@ -405,7 +400,7 @@
     ]
     #v(26pt)
     #text(size: 16pt, fill: white)[
-      🔗 predlab.teddytennant.com · poly.teddytennant.com (API)
+      predlab.teddytennant.com · poly.teddytennant.com (API)
     ]
     #v(10pt)
     #text(size: 14pt, fill: rgb("#9fb0cc"))[

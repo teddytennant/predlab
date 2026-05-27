@@ -57,9 +57,9 @@
 )
 
 // ---- Helpers -----------------------------------------------------------
-#let callout(title, body, fill: lightbg, edge: accent) = block(
-  width: 100%, fill: fill, inset: 11pt, radius: 5pt,
-  stroke: (left: 3pt + edge),
+#let callout(title, body) = block(
+  width: 100%, fill: lightbg, inset: 11pt, radius: 5pt,
+  stroke: 0.5pt + line-grey,
   {
     if title != none {
       text(font: ("Liberation Sans",), weight: "bold", size: 9.5pt, fill: navy, title)
@@ -95,9 +95,8 @@
 #v(10pt)
 
 #callout(
-  [⚠ Educational use only],
+  [Educational use only],
   [*PAPER TRADING ONLY.* The Club is *not affiliated with, endorsed by, or connected to Polymarket.* No real money, cryptocurrency, or wagering is ever involved — every member trades fake "paper" balances for learning and competition. The Club mirrors public market *data* for realism; it is not a brokerage, exchange, or gambling operation.],
-  fill: rgb("#fff7ed"), edge: rgb("#c2772a"),
 )
 
 // =======================================================================
@@ -225,7 +224,7 @@ This is the Club's defining principle, so it is stated plainly:
 
 #callout([AI use is *unrestricted* — and actively *encouraged.*], [
   Members may use *any* AI tool, model, or agent, to *any* degree, at *any* stage — to research markets, write code, design strategies, or trade fully autonomously. There is *no* cap on automation. A member who never places a manual trade and lets an agent run the whole season is competing exactly as intended.
-], fill: rgb("#eef5ff"), edge: accent)
+])
 
 Why we lean *into* AI rather than restrict it:
 
