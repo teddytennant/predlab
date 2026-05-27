@@ -4,7 +4,10 @@ from __future__ import annotations
 
 import asyncio
 
+from sqlalchemy import select
+
 from polymarket_sim.clients.gamma import GammaClient
+from polymarket_sim.models.db import Market
 
 PAGE_SIZE = 100
 
@@ -72,6 +75,34 @@ def test_pagination_stops_on_empty_or_error_page():
     got, n = _fetch(pages, min_volume=0, max_markets=10_000)
     assert len(got) == 100
     assert n == 2  # asked for page 1, got nothing, stopped cleanly
+
+
+def test_sync_dedupes_duplicate_market_ids(session, monkeypatch):
+    """The same market id arriving on two Gamma pages must not double-insert."""
+    from polymarket_sim.services import sync as sync_mod
+
+    def m(mid, vol):
+        return {
+            "id": mid,
+            "conditionId": f"0xcond_{mid}",
+            "question": f"Q {mid}",
+            "volume": vol,
+            "outcomes": ["Yes", "No"],
+            "outcomePrices": ["0.5", "0.5"],
+            "clobTokenIds": [f"{mid}-y", f"{mid}-n"],
+        }
+
+    batch = [m("dup1", 5000), m("dup1", 4000), m("uniq2", 3000)]
+
+    async def fake_fetch(self, **kwargs):
+        return batch
+
+    monkeypatch.setattr(sync_mod.GammaClient, "fetch_markets_by_volume", fake_fetch)
+
+    n = asyncio.run(sync_mod.sync_markets_from_gamma(session))
+    assert n == 2  # dup1 collapsed to a single row
+    ids = {row.id for row in session.execute(select(Market)).scalars().all()}
+    assert ids == {"dup1", "uniq2"}
 
 
 def test_markets_endpoint_clamps_limit(client, session, make_market, monkeypatch):

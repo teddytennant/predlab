@@ -79,13 +79,25 @@ async def sync_markets_from_gamma(db: Session, *, max_markets: int | None = None
         logger.warning("No markets returned from Gamma — sync skipped.")
         return 0
 
+    # Gamma's volume ordering shifts in real time, so the same market can land on
+    # two pages. id and condition_id are both UNIQUE+NOT NULL, and the whole batch
+    # commits at once — so a single duplicate (or a blank condition_id) would roll
+    # back every market. Keep the first (highest-volume) occurrence of each and
+    # drop blank condition_ids defensively.
+    seen_ids: set[str] = set()
+    seen_condition_ids: set[str] = set()
+
     upserted = 0
     for raw in raw_markets:
-        market_id = str(raw.get("id"))
-        if not market_id:
+        market_id = str(raw.get("id") or "")
+        if not market_id or market_id in seen_ids:
             continue
-
         condition_id = str(raw.get("conditionId") or raw.get("condition_id") or "")
+        if not condition_id or condition_id in seen_condition_ids:
+            continue
+        seen_ids.add(market_id)
+        seen_condition_ids.add(condition_id)
+
         question = str(raw.get("question", "Unknown market"))[:500]
         slug = str(raw.get("slug", market_id))[:120]
 
