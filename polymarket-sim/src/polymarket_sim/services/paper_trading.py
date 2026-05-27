@@ -135,8 +135,12 @@ def update_position_on_fill(
     - sell: decrease size (allow going to 0, not negative for MVP)
     """
     pos = get_or_create_position(db, user, market, clob_token_id)
-    old_size = pos.size
-    old_avg = pos.avg_entry_price or fill_price
+    # Numeric columns reload from the DB as Decimal; coerce so arithmetic with
+    # the incoming float fill never raises (Decimal - float is a TypeError).
+    old_size = float(pos.size or 0.0)
+    old_avg = float(pos.avg_entry_price if pos.avg_entry_price is not None else fill_price)
+    fill_size = float(fill_size)
+    fill_price = float(fill_price)
 
     if side == "buy":
         # New average entry
@@ -286,8 +290,10 @@ def place_paper_order(
         )
         db.add(trade)
 
-        # Accounting
+        # Accounting for the taker (incoming) order...
         _process_fill_accounting(db, user, market, clob_token_id, f_size, f_price, f_side, order)
+        # ...and the resting maker on the other side of the same fill.
+        _settle_resting_counterparty(db, market, clob_token_id, f, f_side)
 
         total_filled_now += f_size
 
@@ -338,6 +344,53 @@ def _process_fill_accounting(
         credit = fill_price * fill_size
         _adjust_balance(db, user, credit, f"sell fill {fill_size}@{fill_price}")
         update_position_on_fill(db, user, market, clob_token_id, fill_size, fill_price, "sell")
+
+
+def _settle_resting_counterparty(
+    db: Session,
+    market: Market,
+    clob_token_id: str,
+    fill: dict[str, Any],
+    taker_side: str,
+) -> None:
+    """Settle the maker side of a fill so both parties' books move.
+
+    The matching engine fills a taker against resting orders, but place only ran
+    accounting for the incoming (taker) order — leaving the resting owner's cash
+    and position untouched. Apply the mirror-image fill to the maker. A resting
+    buy already escrowed its notional at placement, and a resting sell escrowed
+    nothing, so ``_process_fill_accounting`` settles each correctly as-is.
+    """
+    counter_id = fill.get("counter_order_id")
+    if counter_id is None:
+        return
+    maker_order = db.get(Order, counter_id)
+    if maker_order is None:
+        return
+    maker_user = db.get(User, maker_order.user_id)
+    if maker_user is None:
+        return
+
+    f_price = float(fill["price"])
+    f_size = float(fill["size"])
+    maker_side = "sell" if taker_side == "buy" else "buy"
+
+    db.add(
+        Trade(
+            order_id=maker_order.id,
+            user_id=maker_user.id,
+            market_id=market.id,
+            clob_token_id=clob_token_id,
+            price=f_price,
+            size=f_size,
+            side=maker_side,
+        )
+    )
+    _process_fill_accounting(db, maker_user, market, clob_token_id, f_size, f_price, maker_side, maker_order)
+
+    filled = float(maker_order.filled_size or 0.0) + f_size
+    maker_order.filled_size = min(float(maker_order.size), filled)
+    maker_order.status = "filled" if filled >= float(maker_order.size) - 1e-9 else "partial"
 
 
 # ---------------------------------------------------------------------------

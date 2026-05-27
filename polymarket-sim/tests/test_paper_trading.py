@@ -91,6 +91,27 @@ def test_sell_fill_credits_cash(session, market):
     assert _balance(session, seller) == pytest.approx(before + 0.60 * 10)
 
 
+def test_resting_maker_is_settled_on_fill(session, market, starting_balance):
+    """Both sides of a cross must settle — not just the incoming taker.
+
+    Before the fix the resting maker was credited nothing and its order stayed
+    'open' forever. Now it is paid the fill proceeds and marked filled. (Position
+    still clamps at 0 under the current no-shorts MVP.)
+    """
+    maker = _user(session, "maker")
+    taker = _user(session, "taker")
+    maker_order = place_paper_order(
+        session, maker, market.id, TOKEN_YES, side="sell", price=0.30, size=10
+    )
+    assert _balance(session, maker) == pytest.approx(starting_balance)
+    place_paper_order(session, taker, market.id, TOKEN_YES, side="buy", price=0.50, size=10)
+
+    session.refresh(maker_order)
+    assert maker_order.status == "filled"
+    assert float(maker_order.filled_size) == pytest.approx(10)
+    assert _balance(session, maker) == pytest.approx(starting_balance + 0.30 * 10)
+
+
 def test_vwap_average_entry_updates_across_fills(session, market):
     alice = _user(session, "alice")
     update_position_on_fill(session, alice, market, TOKEN_YES, 10, 0.40, "buy")
