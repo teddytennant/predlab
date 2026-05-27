@@ -1,28 +1,26 @@
 //! PredLab club leaderboard — a single clean web page at the club subdomain.
 //!
-//! Fetches both simulators' admin standings *server-side* (so the admin secrets
-//! never leave the box), merges them into a combined paper net-worth ranking,
-//! and serves one self-contained HTML page styled as a plain monochrome
-//! terminal table. The standings are cached briefly so a burst of visitors
-//! doesn't hammer the sims; the page also auto-refreshes.
+//! Fetches the Polymarket simulator's admin standings *server-side* (so the
+//! admin secret never leaves the box) and serves one self-contained HTML page
+//! styled as a plain monochrome terminal table. The standings are cached
+//! briefly so a burst of visitors doesn't hammer the sim; the page also
+//! auto-refreshes.
 //!
 //! Config via env:
 //!   BIND                   listen address (default 0.0.0.0:8003)
 //!   POLY_URL               Polymarket sim base (default http://localhost:8001)
-//!   KALSHI_URL             Kalshi sim base     (default http://localhost:8002)
 //!   PREDLAB_ADMIN_SECRET   X-Admin-Secret for Polymarket /admin/leaderboard
-//!   PREDLAB_KALSHI_SECRET  X-Kalshi-Sim-Admin for Kalshi /admin/leaderboard
 //!   EXCLUDE_USERS          comma-separated usernames hidden from the board
 //!                          (default "club_admin,demo_trader" — staff/seed accounts)
 
-use std::collections::{BTreeMap, HashSet};
+use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 use axum::{extract::State, response::Html, routing::get, Router};
 
-/// How long a rendered page is reused before we re-fetch the sims.
+/// How long a rendered page is reused before we re-fetch the sim.
 const CACHE_TTL: Duration = Duration::from_secs(15);
 /// Browser auto-refresh interval (seconds) baked into the page.
 const REFRESH_SECS: u32 = 30;
@@ -30,9 +28,7 @@ const REFRESH_SECS: u32 = 30;
 #[derive(Clone, Default)]
 struct Leader {
     username: String,
-    poly: f64,
-    kalshi: f64,
-    total: f64,
+    net_worth: f64,
 }
 
 struct Cache {
@@ -43,9 +39,7 @@ struct Cache {
 #[derive(Clone)]
 struct AppState {
     poly_url: String,
-    kalshi_url: String,
     admin_secret: String,
-    kalshi_secret: String,
     exclude: HashSet<String>,
     client: reqwest::Client,
     cache: Arc<Mutex<Cache>>,
@@ -63,11 +57,7 @@ impl AppState {
             poly_url: env("POLY_URL", "http://localhost:8001")
                 .trim_end_matches('/')
                 .to_string(),
-            kalshi_url: env("KALSHI_URL", "http://localhost:8002")
-                .trim_end_matches('/')
-                .to_string(),
             admin_secret: env("PREDLAB_ADMIN_SECRET", ""),
-            kalshi_secret: env("PREDLAB_KALSHI_SECRET", ""),
             exclude,
             client: reqwest::Client::new(),
             cache: Arc::new(Mutex::new(Cache { html: String::new(), at: None })),
@@ -93,7 +83,7 @@ async fn main() -> Result<()> {
 }
 
 async fn index(State(st): State<AppState>) -> Html<String> {
-    // Serve a fresh-enough cached render without touching the sims.
+    // Serve a fresh-enough cached render without touching the sim.
     if let Ok(c) = st.cache.lock() {
         if let Some(at) = c.at {
             if at.elapsed() < CACHE_TTL && !c.html.is_empty() {
@@ -114,12 +104,9 @@ async fn index(State(st): State<AppState>) -> Html<String> {
     Html(html)
 }
 
-/// Fetch both sims' per-user net worth and merge into a combined ranking,
-/// dropping any excluded (staff/seed) usernames.
+/// Fetch the sim's per-user net worth, dropping excluded (staff/seed) usernames.
 async fn fetch_leaders(st: &AppState) -> Result<Vec<Leader>> {
-    let net = |v: &serde_json::Value| v.get("net_worth").and_then(|n| n.as_f64()).unwrap_or(0.0);
-
-    let poly: Vec<serde_json::Value> = st
+    let rows: Vec<serde_json::Value> = st
         .client
         .get(format!("{}/admin/leaderboard", st.poly_url))
         .header("X-Admin-Secret", &st.admin_secret)
@@ -132,47 +119,25 @@ async fn fetch_leaders(st: &AppState) -> Result<Vec<Leader>> {
         .await
         .context("parsing polymarket leaderboard")?;
 
-    let kalshi: Vec<serde_json::Value> = st
-        .client
-        .get(format!("{}/trade-api/v2/admin/leaderboard", st.kalshi_url))
-        .header("X-Kalshi-Sim-Admin", &st.kalshi_secret)
-        .send()
-        .await
-        .context("calling kalshi /admin/leaderboard")?
-        .error_for_status()
-        .context("kalshi leaderboard rejected")?
-        .json()
-        .await
-        .context("parsing kalshi leaderboard")?;
-
-    let mut by_user: BTreeMap<String, Leader> = BTreeMap::new();
-    for e in &poly {
-        if let Some(u) = e.get("username").and_then(|v| v.as_str()) {
+    let mut leaders: Vec<Leader> = rows
+        .iter()
+        .filter_map(|e| {
+            let u = e.get("username").and_then(|v| v.as_str())?;
             if st.exclude.contains(u) {
-                continue;
+                return None;
             }
-            by_user.entry(u.to_string()).or_default().poly = net(e);
-        }
-    }
-    for e in &kalshi {
-        if let Some(u) = e.get("username").and_then(|v| v.as_str()) {
-            if st.exclude.contains(u) {
-                continue;
-            }
-            by_user.entry(u.to_string()).or_default().kalshi = net(e);
-        }
-    }
-
-    let mut rows: Vec<Leader> = by_user
-        .into_iter()
-        .map(|(username, mut l)| {
-            l.username = username;
-            l.total = l.poly + l.kalshi;
-            l
+            Some(Leader {
+                username: u.to_string(),
+                net_worth: e.get("net_worth").and_then(|n| n.as_f64()).unwrap_or(0.0),
+            })
         })
         .collect();
-    rows.sort_by(|a, b| b.total.partial_cmp(&a.total).unwrap_or(std::cmp::Ordering::Equal));
-    Ok(rows)
+    leaders.sort_by(|a, b| {
+        b.net_worth
+            .partial_cmp(&a.net_worth)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    Ok(leaders)
 }
 
 /// Format a dollar amount with thousands separators, e.g. 25431.5 -> "$25,431.50".
@@ -290,8 +255,7 @@ pre {
 fn page_shell(table_text: &str) -> String {
     let content = format!(
         "<span class=\"dim\">$</span> predlab leaderboard\n\n{}\n\n\
-         <span class=\"dim\"># combined net worth · both simulators · \
-         refreshes every {}s · paper trading only</span>",
+         <span class=\"dim\"># paper net worth · refreshes every {}s · paper trading only</span>",
         esc(table_text),
         REFRESH_SECS,
     );
@@ -323,16 +287,14 @@ fn render_page(rows: &[Leader]) -> String {
         .map(|(i, l)| {
             vec![
                 (i + 1).to_string(),
-                truncate(&l.username, 24),
-                fmt_money(l.poly),
-                fmt_money(l.kalshi),
-                fmt_money(l.total),
+                truncate(&l.username, 28),
+                fmt_money(l.net_worth),
             ]
         })
         .collect();
     let table = build_table(
-        &["#", "MEMBER", "POLYMARKET", "KALSHI", "TOTAL"],
-        &[Align::Right, Align::Left, Align::Right, Align::Right, Align::Right],
+        &["#", "MEMBER", "NET WORTH"],
+        &[Align::Right, Align::Left, Align::Right],
         &data,
     );
     page_shell(&table)
@@ -346,8 +308,8 @@ fn render_error(msg: &str) -> String {
 mod tests {
     use super::*;
 
-    fn leader(name: &str, poly: f64, kalshi: f64) -> Leader {
-        Leader { username: name.into(), poly, kalshi, total: poly + kalshi }
+    fn leader(name: &str, net: f64) -> Leader {
+        Leader { username: name.into(), net_worth: net }
     }
 
     #[test]
@@ -359,9 +321,9 @@ mod tests {
 
     #[test]
     fn table_lists_members_in_order() {
-        let rows = vec![leader("alice", 30000.0, 25000.0), leader("bob", 20000.0, 20000.0)];
+        let rows = vec![leader("alice", 55000.0), leader("bob", 40000.0)];
         let html = render_page(&rows);
-        assert!(html.contains("MEMBER"));
+        assert!(html.contains("MEMBER") && html.contains("NET WORTH"));
         assert!(html.contains("alice"));
         assert!(html.contains("$55,000.00"));
         assert!(html.find("alice").unwrap() < html.find("bob").unwrap());
@@ -377,7 +339,7 @@ mod tests {
 
     #[test]
     fn username_is_escaped() {
-        let html = render_page(&[leader("<script>", 0.0, 0.0)]);
+        let html = render_page(&[leader("<script>", 0.0)]);
         assert!(!html.contains("<script>"));
         assert!(html.contains("&lt;script&gt;"));
     }

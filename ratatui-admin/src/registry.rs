@@ -1,14 +1,16 @@
 //! Club student roster, persisted in `~/.predlab/students.db`.
 //!
-//! Schema is identical to the previous Python admin TUI so existing data is
-//! read back unchanged:
+//! Schema kept compatible with the previous (dual-sim) Python admin TUI so
+//! existing rosters continue to work. The `kalshi_key` column is legacy and
+//! unused in the Polymarket-only version (new records store empty string).
 //!
 //! ```sql
 //! CREATE TABLE students (
 //!     username     TEXT PRIMARY KEY,
 //!     display_name TEXT,
 //!     poly_key     TEXT,
-//!     kalshi_key   TEXT,
+//!     kalshi_key   TEXT,   -- legacy, unused (Polymarket-only now)
+//!     role         TEXT,
 //!     created_at   TEXT
 //! )
 //! ```
@@ -18,14 +20,14 @@ use std::path::{Path, PathBuf};
 use anyhow::Result;
 use rusqlite::{params, Connection};
 
-/// One club member with their paper keys for both simulators.
+/// One club member with their paper key (Polymarket-only; kalshi_key kept for schema compat).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Student {
     pub username: String,
     pub display_name: String,
     pub poly_key: String,
     pub kalshi_key: String,
-    /// Access role granted on both sims: "member", "admin", or "owner".
+    /// Access role granted on the Polymarket sim: "member", "admin", or "owner".
     pub role: String,
     pub created_at: String,
 }

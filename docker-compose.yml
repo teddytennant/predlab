@@ -5,7 +5,7 @@ services:
       POSTGRES_USER: predlab
       POSTGRES_PASSWORD: predlab
       POSTGRES_DB: postgres
-      POSTGRES_MULTIPLE_DATABASES: polymarket,kalshi
+      POSTGRES_MULTIPLE_DATABASES: polymarket
     ports:
       - "5432:5432"
     volumes:
@@ -39,27 +39,6 @@ services:
       timeout: 5s
       retries: 3
 
-  kalshi-sim:
-    build:
-      context: ./kalshi-sim
-    ports:
-      - "8002:8002"
-    environment:
-      - PORT=8002
-      - DATABASE_URL=postgresql+psycopg2://predlab:predlab@postgres:5432/kalshi
-      - ENVIRONMENT=${ENVIRONMENT:-production}
-      - CLUB_ADMIN_SECRET=${CLUB_ADMIN_SECRET:-change-me-set-in-dotenv}
-      - DEV_BYPASS_AUTH=${DEV_BYPASS_AUTH:-false}
-    depends_on:
-      postgres:
-        condition: service_healthy
-    restart: unless-stopped
-    healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8002/health', timeout=3)"]
-      interval: 30s
-      timeout: 5s
-      retries: 3
-
   leaderboard:
     build:
       context: ./leaderboard-rs
@@ -67,16 +46,13 @@ services:
       - "8003:8003"
     environment:
       - BIND=0.0.0.0:8003
-      # Reach the sims over the internal compose network (no TLS, no Cloudflare).
+      # Reach the sim over the internal compose network (no TLS, no Cloudflare).
       - POLY_URL=http://polymarket-sim:8001
-      - KALSHI_URL=http://kalshi-sim:8002
       - PREDLAB_ADMIN_SECRET=${ADMIN_SECRET:-change-me-set-in-dotenv}
-      - PREDLAB_KALSHI_SECRET=${CLUB_ADMIN_SECRET:-change-me-set-in-dotenv}
       # Staff/seed accounts hidden from the public board (comma-separated).
       - EXCLUDE_USERS=${LEADERBOARD_EXCLUDE:-club_admin,demo_trader}
     depends_on:
       - polymarket-sim
-      - kalshi-sim
     restart: unless-stopped
 
 volumes:

@@ -2,109 +2,66 @@
 
 **PredLab** is the paper-trading playground for the school Prediction Markets Club.
 
-Trade on **both** Polymarket-style and Kalshi-style markets with fake money, practice real
-strategies, and climb the club leaderboard. Nothing to install — your admin gives you a key
-and you trade against the club's hosted servers.
+Trade on Polymarket-style markets with fake money, practice real strategies, and climb the club leaderboard. Nothing to install — your admin gives you a key and you trade against the club's hosted server.
 
-> **PAPER TRADING ONLY — NOT AFFILIATED WITH POLYMARKET OR KALSHI.** Educational use, fake money.
+> **PAPER TRADING ONLY — NOT AFFILIATED WITH POLYMARKET.** Educational use, fake money.
 
 ## 🏆 Leaderboard
 
-**[predlab.teddytennant.com](https://predlab.teddytennant.com)** — live combined net-worth
-standings across both simulators, updated automatically.
+**[predlab.teddytennant.com](https://predlab.teddytennant.com)** — live paper net-worth standings, updated automatically.
 
 ## Getting started
 
 There are no servers for you to run. A club admin sets you up with:
 
-- a **username**,
-- a **Polymarket API key** (a string), and
-- a **Kalshi key id** + a **private key file** (`<you>.pem` — save it, it's only shown once).
+- a **username**, and
+- a **Polymarket API key** (a string you send as the `POLY_API_KEY` header).
 
-Everyone starts with **$25,000 of paper money on each platform**, traded against the club's
-hosted servers (`https://poly.teddytennant.com` and `https://kalshi.teddytennant.com`).
+Everyone starts with **$25,000 of paper money**, traded against the club's hosted server at `https://poly.teddytennant.com`.
 
 ### Trading in 3 steps — download one file
 
-The whole client is a single file, [`examples/predlab.py`](examples/predlab.py). It talks to
-both platforms (and does Kalshi's fiddly request-signing for you), so you don't need any SDK.
+The whole client is a single file, [`examples/predlab.py`](examples/predlab.py). It talks to the Polymarket-style sim so you don't need any SDK.
 
-1. **Download** [`examples/predlab.py`](examples/predlab.py) and `pip install requests cryptography`.
+1. **Download** [`examples/predlab.py`](examples/predlab.py) and `pip install requests`.
 2. **Paste in your key** and trade:
 
    ```python
-   from predlab import PolymarketClient, KalshiClient
+   from predlab import PolymarketClient
 
-   poly = PolymarketClient(api_key="pm_paper_...")           # your Polymarket key
+   poly = PolymarketClient(api_key="pm_paper_...")           # your key
    print(poly.markets(limit=5))                              # browse markets
    poly.place_order(token_id="<token>", side="BUY", price=0.55, size=10)
-
-   kal = KalshiClient(key_id="ks_live_...", private_key_pem_path="you.pem")
-   print(kal.balance())                                      # -> $25,000 to start
-   kal.create_order(ticker="<TICKER>", side="bid", count=10, price=0.65)
+   print(poly.positions())
    ```
 
-3. **Climb the [leaderboard](https://predlab.teddytennant.com).** Your combined net worth
-   updates automatically.
+3. **Climb the [leaderboard](https://predlab.teddytennant.com).** Your net worth updates automatically.
 
-Full walkthrough: [`examples/README.md`](examples/README.md). Prefer `curl` or the official
-SDKs instead? The base URLs and per-platform details are below.
+Full walkthrough: [`examples/README.md`](examples/README.md). Prefer `curl`? See the curl examples below.
 
 **What needs your key:**
 
-- **No key needed** — looking at market data: `GET /health`, `GET /markets`, `GET /events`,
-  `GET /book`, `GET /midpoint`, `GET /spread`, `GET /last-trade-price`.
-- **Needs your key** — anything that touches *your account*: placing/cancelling orders,
-  positions, balance. Calls without a valid key get rejected (`401`).
+- **No key needed** — public market data: `GET /markets`, `GET /book`, `GET /midpoint`, etc.
+- **Needs your key** — anything touching *your account*: orders, positions, balance (`401` otherwise).
 
-### Trade on Polymarket
-
-Polymarket just wants your key in a header. Browse first, then trade:
+### Quick curl examples (Polymarket style)
 
 ```bash
-# 1. See what markets exist (no key needed)
+# 1. See markets (no key)
 curl https://poly.teddytennant.com/markets
 
-# 2. Place an order — your key goes in the POLY_API_KEY header
+# 2. Place an order
 curl -X POST https://poly.teddytennant.com/order \
   -H "POLY_API_KEY: <your_api_key>" -H "Content-Type: application/json" \
   -d '{"token_id":"<token>","side":"BUY","price":0.55,"size":10}'
 
-# 3. Check your positions / balance
+# 3. Check positions
 curl https://poly.teddytennant.com/positions -H "POLY_API_KEY: <your_api_key>"
 ```
 
-(`Authorization: Bearer <key>` works too if your SDK prefers it.)
+(`Authorization: Bearer <key>` also works.)
 
-### Trade on Kalshi
-
-Kalshi signs every request with your **private key**, so the easiest path is the official
-Kalshi Python SDK pointed at the base URL — it builds the signature for you:
-
-```python
-from kalshi_python import KalshiClient   # official SDK
-
-client = KalshiClient(
-    base_url="https://kalshi.teddytennant.com/trade-api/v2",
-    key_id="ks_live_...",                       # your key id
-    private_key_pem=open("you.pem").read(),     # the .pem your admin gave you
-)
-
-print(client.get_balance())
-print(client.get_markets())
-# client.create_order(...) to trade
-```
-
-Keep your `.pem` file private — anyone who has it can trade as you.
-
-### Your standings
-
-Your **net worth** is your cash plus any open positions marked to the current price. The live
-leaderboard at **[predlab.teddytennant.com](https://predlab.teddytennant.com)** combines both
-platforms and updates automatically.
-
-Made a mess of your account? An admin can reset you back to the starting $25,000 anytime —
-just ask.
+Made a mess? Ask an admin to reset your balance to the starting $25,000.
 
 ---
 
@@ -115,137 +72,105 @@ just ask.
 
 ```
 predlab/
-├── polymarket-sim/   # Polymarket Gamma + CLOB API mock (Python / FastAPI)   :8001
-├── kalshi-sim/       # Kalshi Trade API v2 mock        (Python / FastAPI)    :8002
-├── leaderboard-rs/   # Public live leaderboard page    (Rust / axum)         :8003
-├── ratatui-admin/    # Admin TUI (Rust): issue dual keys + club roster
-├── examples/         # Member starter-kit client (predlab.py)
+├── polymarket-sim/   # Polymarket-style Gamma + CLOB mock (Python / FastAPI)  :8001
+├── leaderboard-rs/   # Public live leaderboard page (Rust / axum)             :8003
+├── ratatui-admin/    # Admin TUI (Rust): issue keys + manage club roster
+├── examples/         # Member starter client (predlab.py)
 ├── docker-compose.yml
 └── Makefile
 ```
 
-The two simulators sync live prices from the real public APIs and expose drop-in–compatible
-endpoints, so members point the official SDKs at the base URL and only change the host.
+The simulator syncs live prices from the real public Polymarket APIs and exposes drop-in–compatible endpoints.
 
-### Run the simulators
+### Run the simulator
 
 ```bash
 git clone https://github.com/teddytennant/predlab.git && cd predlab
-docker compose up --build      # Polymarket -> :8001, Kalshi -> :8002
+docker compose up --build      # Polymarket -> :8001, leaderboard -> :8003
 ```
 
-Or run one directly for development:
+Or run directly for development:
 
 ```bash
 cd polymarket-sim && pip install -e ".[dev]" && uvicorn polymarket_sim.main:app --port 8001
-cd kalshi-sim     && pip install -e ".[dev]" && uvicorn kalshi_sim.main:app     --port 8002
 ```
 
 ### Admin TUI
 
 ```bash
-make install-admin     # cargo install --path ratatui-admin  -> `predlab` on your PATH
+make install-admin     # cargo install --path ratatui-admin  -> `predlab` on PATH
 predlab                # or: make admin
 ```
 
-Three tabs. Switch with `l`/`h` (next/prev) or `Tab`/`Shift+Tab` (`h`/`l` type into the
-username in the Issue view, so use `Tab` there):
+Three tabs (`l`/`h` or Tab to switch):
 
-- **Issue keys** — type a username, pick a role with `←/→`, `Enter` mints paper keys on
-  *both* simulators, saves the member to the roster, copies a credentials block to your
-  clipboard, and writes the Kalshi private key to `~/.predlab/keys/<username>.pem`.
-- **Roster** — the club's students from `~/.predlab/students.db` (`j`/`k` or ↑/↓ to select).
-  Member ops: `c` re-copies credentials, `r` resets the selected member's balances to the
-  starting amount, `R` resets *everyone* (start-of-competition wipe), and `x` permanently
-  removes the selected member from both sims and the roster. Destructive actions need a `y`
-  confirmation.
-- **Leaderboard** — every member ranked by **combined paper net worth** across both sims
-  (live; `r` refreshes).
+- **Issue key** — type a username, pick a role with `←/→`, `Enter` mints a paper API key on the sim, saves the member to the local roster (`~/.predlab/students.db`), and copies the credentials block to your clipboard.
+- **Roster** — browse members. `c` copies creds, `r` resets selected balance, `R` resets everyone, `x` removes member (destructive actions require `y` confirm).
+- **Leaderboard** — live ranking by paper net worth (`r` to refresh).
 
-Configure endpoints/secrets via env vars: `POLY_URL`, `KALSHI_URL`, `PREDLAB_ADMIN_SECRET`
-(Polymarket admin, `X-Admin-Secret`), and `PREDLAB_KALSHI_SECRET` (Kalshi admin,
-`X-Kalshi-Sim-Admin`; falls back to `CLUB_ADMIN_SECRET`).
+Env vars: `POLY_URL` (default http://localhost:8001), `PREDLAB_ADMIN_SECRET` (for `X-Admin-Secret`).
 
 ### Roles
 
-Every user has a role. Key issuance is gated on **both** sims — students cannot self-serve.
-
 | Role     | Can do                                                            |
 |----------|-------------------------------------------------------------------|
-| `member` | Trade & view **their own** account only (the default).            |
+| `member` | Trade & view **their own** account only (default).                |
 | `admin`  | Issue/revoke keys, reset balances, remove members. (e.g. the VP.) |
-| `owner`  | Everything, incl. force-resolving markets and granting roles.     |
+| `owner`  | Everything, incl. resolving markets and granting roles.           |
 
-The **master secret** (`ADMIN_SECRET` for Polymarket, `CLUB_ADMIN_SECRET` for Kalshi)
-authenticates as `owner` — that's your bootstrap/break-glass. An admin/owner can also act
-with their **own** key, so you can hand the VP an admin key instead of the master secret.
-Only an owner may mint `admin`/`owner` keys. The `predlab` TUI has a role picker (←/→).
+The **master secret** (`ADMIN_SECRET`) authenticates as `owner` — your bootstrap key. Only owners can mint `admin`/`owner` keys.
 
-### Issuing keys by hand (the TUI does both at once)
+### Issuing keys (curl)
 
 ```bash
-# Polymarket — returns the api_key the member puts in POLY_API_KEY
+# Returns the api_key the member uses as POLY_API_KEY
 curl -X POST "https://poly.teddytennant.com/admin/create-paper-key?username=alice&role=member" \
   -H "X-Admin-Secret: $PREDLAB_ADMIN_SECRET"
-
-# Kalshi — returns the RSA private key ONCE (hand the .pem to the member) plus a key id
-curl -X POST "https://kalshi.teddytennant.com/trade-api/v2/api_keys/generate?username=alice&role=member" \
-  -H "X-Kalshi-Sim-Admin: $CLUB_ADMIN_SECRET" \
-  -H "Content-Type: application/json" -d '{"name":"alice-laptop","scopes":["trade"]}'
 ```
 
-Add `&role=admin` (owner only) to mint an admin key.
+Add `&role=admin` (owner only) for admin keys.
 
-### Standings & teaching ops
+### Admin operations
 
-`GET /admin/leaderboard` (Polymarket) and `GET /trade-api/v2/admin/leaderboard` (Kalshi)
-return every member ranked by paper net worth (cash + open positions marked to current
-price). Both are admin-gated; the TUI's Leaderboard tab merges them into one ranking, and the
-`leaderboard-rs/` service renders the same combined ranking as the public page at
-[predlab.teddytennant.com](https://predlab.teddytennant.com).
+`GET /admin/leaderboard` (admin-gated) returns members ranked by net worth.
 
-Resets and removals (admin-gated; the `predlab` TUI fires each on both sims at once):
+Resets / deletes (admin-gated):
 
-| Action            | Polymarket                                  | Kalshi                                          |
-|-------------------|---------------------------------------------|-------------------------------------------------|
-| Reset one member  | `POST /admin/reset-balance?username=alice`  | `POST /trade-api/v2/admin/reset-user?username=alice` |
-| Reset **everyone** | `POST /admin/reset-balance` (no username)  | `POST /trade-api/v2/admin/reset-user` (no username)  |
-| Remove a member   | `POST /admin/delete-user?username=alice`    | `POST /trade-api/v2/admin/delete-user?username=alice` |
+| Action            | Polymarket endpoint                          |
+|-------------------|----------------------------------------------|
+| Reset one member  | `POST /admin/reset-balance?username=alice`   |
+| Reset everyone    | `POST /admin/reset-balance`                  |
+| Remove a member   | `POST /admin/delete-user?username=alice`     |
 
-A *reset* is a clean slate — cash returns to the starting balance, open orders are cancelled
-and positions cleared, so net worth is exactly the starting amount. *Remove* permanently
-deletes the member and all their data (for when someone leaves the club).
+A reset clears orders/positions and returns cash to the starting balance. Remove is permanent.
 
 ### Testing
 
 ```bash
-make test          # runs all three suites
-make test-sims     # pytest for both simulators
-make test-admin    # cargo test for the admin tool
+make test          # all suites
+make test-sims     # pytest for the simulator
+make test-admin    # cargo test for the TUI + registry
+make lint
 ```
 
-The simulator tests run fully offline (isolated temp SQLite, no live network sync).
+Simulator tests are fully offline (temp SQLite, no network).
 
-### Deploying for the club
+### Deploying
 
-The live instance runs on a NixOS host as a `docker compose` stack (Postgres + both sims),
-exposed over HTTPS by a **Cloudflare Tunnel** (declarative `services.cloudflared` in
-`/etc/nixos`). The tunnel dials out to Cloudflare, so no inbound ports are opened.
-Production config lives in a gitignored `.env` (see `.env.example`):
+The live instance is a `docker compose` stack (Postgres + polymarket-sim + leaderboard-rs) on a NixOS host, exposed via Cloudflare Tunnel (no open inbound ports).
+
+Production config in a gitignored `.env`:
 
 ```bash
-cp .env.example .env        # set ADMIN_SECRET, CLUB_ADMIN_SECRET; keep DEV_BYPASS_AUTH=false
+cp .env.example .env   # set a strong ADMIN_SECRET
 docker compose up -d --build
 ```
 
-Update a running deployment with `git pull --ff-only && docker compose up -d --build`
-(the Postgres volume persists paper balances across rebuilds).
+Update with `git pull --ff-only && docker compose up -d --build`.
 
 **Access model:**
-- Key issuance is **admin-gated on both sims** — students can't self-serve; only people you
-  (or an admin) issue a key to can trade, and only an owner can mint admin/owner keys.
-- Members are scoped to their own account on every endpoint.
-- CORS is `allow_origins=["*"]`. Harmless for SDK/script clients; tighten if you add a
-  browser frontend on a specific origin.
+- Key issuance is admin/owner-gated — students cannot self-serve.
+- Members are scoped to their own account.
+- CORS is open (`*`) for convenience with SDKs/scripts.
 
 </details>

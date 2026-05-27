@@ -3,7 +3,6 @@ set -e
 
 psql -v ON_ERROR_STOP=1 --username "$POSTGRES_USER" --dbname "$POSTGRES_DB" <<-EOSQL
     CREATE DATABASE polymarket;
-    CREATE DATABASE kalshi;
 EOSQL
 
-echo "Created databases: polymarket, kalshi"
+echo "Created database: polymarket"

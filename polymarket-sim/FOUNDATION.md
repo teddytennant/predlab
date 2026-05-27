@@ -2,7 +2,7 @@
 
 **Date:** 2026-05-20  
 **Phase:** 1 (Foundation)  
-**Repo:** polymarket-sim (sibling: kalshi-sim will follow identical pattern)
+**Repo:** polymarket-sim (the club now runs Polymarket-only; Kalshi sim was removed in the 2026 migration)
 
 ## What Was Built
 

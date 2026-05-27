@@ -12,7 +12,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        sim: [polymarket-sim, kalshi-sim]
+        sim: [polymarket-sim]
     defaults:
       run:
         working-directory: ${{ matrix.sim }}

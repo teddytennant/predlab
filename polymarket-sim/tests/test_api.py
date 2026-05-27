@@ -70,3 +70,18 @@ def test_positions_endpoint_authenticated(client, session, market):
     resp = client.get("/positions", headers={"POLY_API_KEY": key})
     assert resp.status_code == 200
     assert resp.json() == []  # no positions yet
+
+
+def test_portfolio_requires_api_key(client):
+    resp = client.get("/portfolio")
+    assert resp.status_code == 401
+
+
+def test_portfolio_summary_starts_at_starting_balance(client, session, starting_balance):
+    _user, key, _secret = create_demo_user_with_key(session, "erin", "Erin")
+    resp = client.get("/portfolio", headers={"POLY_API_KEY": key})
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["cash"] == starting_balance
+    assert body["positions_value"] == 0
+    assert body["net_worth"] == starting_balance

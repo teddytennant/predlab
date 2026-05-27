@@ -1,12 +1,11 @@
-//! Deterministic club leaderboard: rank members by total paper balance and
-//! format money for display. Pure functions, no I/O — the TUI fetches balances
-//! from the simulators and feeds them in.
+//! Deterministic club leaderboard helpers (currently unused by the TUI, which
+//! fetches directly). Rank members by paper net worth and format money.
 
-/// A member's combined standing across both simulators.
+/// A member's paper-trading standing.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Standing {
     pub username: String,
-    /// Combined paper balance across Polymarket + Kalshi sims, in cents.
+    /// Paper net worth in cents (from the Polymarket sim).
     pub total_cents: i64,
 }
 

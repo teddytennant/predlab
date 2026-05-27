@@ -1,56 +1,45 @@
 # PredLab starter kit (for members)
 
-You got a key from a club admin — here's how to actually trade with it. There's no big
-SDK to install: [`predlab.py`](predlab.py) is the whole client.
+You got a Polymarket paper-trading API key from a club admin. No big SDK needed —
+[`predlab.py`](predlab.py) is the entire client (just `requests`).
 
-## 1. Install the two dependencies
-
-```bash
-pip install -r requirements.txt        # requests + cryptography
-```
-
-## 2. Set your credentials
-
-Your admin gave you a **Polymarket API key** and, for Kalshi, a **key id** plus a
-**private key file** (`you.pem` — keep it private, it's only issued once).
+## 1. Install the dependency
 
 ```bash
-export POLY_KEY="pm_paper_..."          # your Polymarket API key
-export KALSHI_KEY_ID="ks_live_..."      # your Kalshi key id
-export KALSHI_PEM="./you.pem"           # path to your Kalshi private key file
+pip install -r requirements.txt        # requests
 ```
 
-## 3. Check it works
+## 2. Set your key
+
+```bash
+export POLY_KEY="pm_paper_..."          # the key your admin gave you
+```
+
+(Override `POLY_BASE` if hitting a local simulator instead of the club host.)
+
+## 3. Verify it works
 
 ```bash
 python predlab.py
 ```
 
-You should see your Polymarket positions and your Kalshi balance ($25,000 to start).
+You should see a live market and (if your key is set) your positions / balance.
 
-## 4. Trade
+## 4. Trade from Python
 
 ```python
-from predlab import PolymarketClient, KalshiClient
+from predlab import PolymarketClient
 
-# --- Polymarket: auth is just your key in a header ---
-poly = PolymarketClient(api_key="pm_paper_...")
-print(poly.markets(limit=5))                       # browse (public)
-poly.place_order(token_id="<token>", side="BUY", price=0.55, size=10)
-print(poly.positions())
-
-# --- Kalshi: the client signs every request with your .pem for you ---
-kal = KalshiClient(key_id="ks_live_...", private_key_pem_path="you.pem")
-print(kal.balance())
-print(kal.markets(limit=5))
-kal.create_order(ticker="<TICKER>", side="bid", count=10, price=0.65)   # bid = buy YES
-print(kal.positions())
+poly = PolymarketClient(api_key="pm_paper_yourkey")
+print(poly.markets(limit=3))
+poly.place_order(token_id="...", side="BUY", price=0.62, size=10)
 ```
 
-Prices are in dollars from 0 to 1 (a contract pays out $1 if it resolves your way). Both
-platforms start you at **$25,000 of paper money**. Your combined net worth shows up on the
-[club leaderboard](https://predlab.teddytennant.com).
+See the class methods in `predlab.py` for `book`, `positions`, `place_order`, etc.
+Start with $25,000 paper; climb the [leaderboard](https://predlab.teddytennant.com).
 
-> Want the real thing instead? The official **Kalshi Python SDK** also works — point it at
-> `https://kalshi.teddytennant.com/trade-api/v2` with your key id and `.pem`. Polymarket is
-> simple enough that plain `requests`/`curl` with the `POLY_API_KEY` header is easiest.
+## 5. Notes
+
+- Prices are 0–1 (a YES share pays $1 if it resolves your way).
+- You start with **$25,000** paper. Your net worth appears on the club leaderboard.
+- The simulator is a faithful mock of the real Polymarket APIs — your code will work against the live exchange with only a host + key change.

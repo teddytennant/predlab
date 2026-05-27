@@ -1,26 +1,21 @@
-//! PredLab admin TUI.
+//! PredLab admin TUI (Polymarket paper trading).
 //!
 //! Three tabs. Switch with `l`/`h` (next/prev), or `Tab`/`Shift+Tab`. In the
 //! Issue view `h`/`l` type into the username instead, so use `Tab` there.
-//! - **Issue keys** — type a username, pick a role with ←/→, press `Enter` to
-//!   mint paper keys on *both* simulators and save the member to the roster.
-//!   The freshly issued credentials are copied to your clipboard, and the
-//!   Kalshi private key (shown only once by the server) is saved to
-//!   `~/.predlab/keys/<username>.pem` so the member can actually sign requests.
-//! - **Roster** — browse club members (`j`/`k` or ↑/↓). `c` copies a member's credentials;
-//!   `r` resets the selected member's balances to the starting amount, `R`
-//!   resets *everyone* (start-of-competition wipe), and `x` permanently removes
-//!   the selected member from both sims and the roster. Destructive actions ask
-//!   for a `y` confirmation first.
-//! - **Leaderboard** — every member ranked by combined paper net worth across
-//!   both sims (live; press `r` to refresh).
+//! - **Issue key** — type a username, pick a role with ←/→, press `Enter` to
+//!   mint a paper API key on the simulator and save the member to the roster.
+//!   The credentials are copied to your clipboard to hand to the member.
+//! - **Roster** — browse club members (`j`/`k` or ↑/↓). `c` copies a member's
+//!   credentials; `r` resets the selected member's balance to the starting
+//!   amount, `R` resets *everyone* (start-of-competition wipe), and `x`
+//!   permanently removes the selected member. Destructive actions ask for a
+//!   `y` confirmation first.
+//! - **Leaderboard** — every member ranked by paper net worth (live; `r` refreshes).
 //!
-//! Quit with `Esc` (or `q` from the roster/leaderboard). Endpoints/secrets come from the
-//! environment so this works against local sims or a deployed instance:
-//!   POLY_URL (default http://localhost:8001), KALSHI_URL (default :8002),
-//!   PREDLAB_ADMIN_SECRET  (X-Admin-Secret for the Polymarket admin endpoint),
-//!   PREDLAB_KALSHI_SECRET (X-Kalshi-Sim-Admin for the Kalshi generate endpoint;
-//!                          falls back to CLUB_ADMIN_SECRET).
+//! Quit with `Esc` (or `q` from the roster/leaderboard). Endpoints/secrets come
+//! from the environment so this works against a local sim or a deployed instance:
+//!   POLY_URL (default http://localhost:8001),
+//!   PREDLAB_ADMIN_SECRET (X-Admin-Secret for the Polymarket admin endpoints).
 
 use std::io;
 use std::io::Write as _;
@@ -46,19 +41,9 @@ use tokio::runtime::Runtime;
 fn poly_url() -> String {
     std::env::var("POLY_URL").unwrap_or_else(|_| "http://localhost:8001".to_string())
 }
-fn kalshi_url() -> String {
-    std::env::var("KALSHI_URL").unwrap_or_else(|_| "http://localhost:8002".to_string())
-}
 fn admin_secret() -> String {
     std::env::var("PREDLAB_ADMIN_SECRET")
         .or_else(|_| std::env::var("ADMIN_SECRET"))
-        .unwrap_or_default()
-}
-/// Kalshi's master secret (separate from Polymarket's). Issuing Kalshi keys now
-/// requires it. Falls back to CLUB_ADMIN_SECRET.
-fn kalshi_admin_secret() -> String {
-    std::env::var("PREDLAB_KALSHI_SECRET")
-        .or_else(|_| std::env::var("CLUB_ADMIN_SECRET"))
         .unwrap_or_default()
 }
 
@@ -68,7 +53,7 @@ const ROLES: [&str; 3] = ["member", "admin", "owner"];
 /// One-line plain-English summary of what a role can do, shown under the picker.
 fn role_blurb(role: &str) -> &'static str {
     match role {
-        "admin" => "issue/revoke member keys & reset balances — e.g. the VP",
+        "admin" => "issue/revoke keys & reset balances — e.g. the VP",
         "owner" => "full control, incl. resolving markets & granting roles",
         _ => "trades & views only their own account (the default)",
     }
@@ -81,8 +66,6 @@ struct Issued {
     username: String,
     role: String,
     poly_key: String,
-    kalshi_key_id: String,
-    pem_path: Option<String>,
 }
 
 #[derive(PartialEq, Eq, Clone, Copy)]
@@ -93,7 +76,7 @@ enum View {
 }
 
 /// A destructive admin action awaiting a `y` confirmation. These touch live
-/// paper accounts on both sims, so we never fire them on a single keystroke.
+/// paper accounts, so we never fire them on a single keystroke.
 #[derive(Clone, PartialEq, Eq)]
 enum Pending {
     None,
@@ -102,13 +85,11 @@ enum Pending {
     RemoveMember(String),
 }
 
-/// One row of the combined leaderboard: a member's net worth on each sim.
+/// One row of the leaderboard: a member's paper net worth.
 #[derive(Clone, Default)]
 struct Leader {
     username: String,
-    poly: f64,
-    kalshi: f64,
-    total: f64,
+    net_worth: f64,
 }
 
 struct App {
@@ -313,7 +294,7 @@ fn request_reset_member(app: &mut App) {
     match selected_username(app) {
         Some(u) => {
             app.message =
-                format!("⚠ Reset {u} to the starting balance on BOTH sims? Press y to confirm.");
+                format!("⚠ Reset {u} to the starting balance? Press y to confirm.");
             app.pending = Pending::ResetMember(u);
         }
         None => app.message = "Roster is empty — nothing to reset.".into(),
@@ -322,8 +303,7 @@ fn request_reset_member(app: &mut App) {
 
 /// Stage a wipe of every member's balance, pending `y` confirmation.
 fn request_reset_all(app: &mut App) {
-    app.message =
-        "⚠ Reset ALL members to the starting balance on BOTH sims? Press y to confirm.".into();
+    app.message = "⚠ Reset ALL members to the starting balance? Press y to confirm.".into();
     app.pending = Pending::ResetAll;
 }
 
@@ -331,16 +311,15 @@ fn request_reset_all(app: &mut App) {
 fn request_remove_member(app: &mut App) {
     match selected_username(app) {
         Some(u) => {
-            app.message = format!(
-                "⚠ PERMANENTLY remove {u} from both sims and the roster? Press y to confirm."
-            );
+            app.message =
+                format!("⚠ PERMANENTLY remove {u} from the sim and roster? Press y to confirm.");
             app.pending = Pending::RemoveMember(u);
         }
         None => app.message = "Roster is empty — nothing to remove.".into(),
     }
 }
 
-/// Execute a confirmed destructive action against the live sims.
+/// Execute a confirmed destructive action against the live sim.
 fn confirm_pending(app: &mut App, rt: &Runtime, conn: &Connection, pending: Pending) {
     match pending {
         Pending::ResetMember(u) => {
@@ -384,14 +363,7 @@ fn copy_selected_member(app: &mut App) {
         app.message = "Roster is empty — issue a key first.".into();
         return;
     };
-    let pem = pem_path_for(&s.username);
-    let block = creds_block(
-        &s.username,
-        &s.role,
-        &s.poly_key,
-        &s.kalshi_key,
-        std::path::Path::new(&pem).exists().then_some(pem.as_str()),
-    );
+    let block = creds_block(&s.username, &s.role, &s.poly_key);
     app.message = if copy_to_clipboard(&block) {
         format!("📋 Copied {}'s credentials to the clipboard.", s.username)
     } else {
@@ -411,24 +383,16 @@ fn refresh_leaderboard(app: &mut App, rt: &Runtime) {
     app.message = "Loading leaderboard…".into();
     match rt.block_on(fetch_leaderboard()) {
         Ok(rows) => {
-            app.message = format!(
-                "{} members ranked by combined net worth. Press r to refresh.",
-                rows.len()
-            );
+            app.message = format!("{} members ranked by net worth. Press r to refresh.", rows.len());
             app.leaders = rows;
         }
         Err(e) => app.message = format!("❌ {e}"),
     }
 }
 
-/// Fetch both sims' per-user net worth and merge into a combined ranking.
+/// Fetch the sim's per-user net worth, ranked highest first.
 async fn fetch_leaderboard() -> Result<Vec<Leader>> {
-    use std::collections::BTreeMap;
-
-    let client = reqwest::Client::new();
-    let net = |v: &serde_json::Value| v.get("net_worth").and_then(|n| n.as_f64()).unwrap_or(0.0);
-
-    let poly: Vec<serde_json::Value> = client
+    let rows: Vec<serde_json::Value> = reqwest::Client::new()
         .get(format!("{}/admin/leaderboard", poly_url()))
         .header("X-Admin-Secret", admin_secret())
         .send()
@@ -440,55 +404,29 @@ async fn fetch_leaderboard() -> Result<Vec<Leader>> {
         .await
         .context("parsing polymarket leaderboard")?;
 
-    let kalshi: Vec<serde_json::Value> = client
-        .get(format!("{}/trade-api/v2/admin/leaderboard", kalshi_url()))
-        .header("X-Kalshi-Sim-Admin", kalshi_admin_secret())
-        .send()
-        .await
-        .context("calling kalshi /admin/leaderboard")?
-        .error_for_status()
-        .context("kalshi leaderboard rejected (check PREDLAB_KALSHI_SECRET)")?
-        .json()
-        .await
-        .context("parsing kalshi leaderboard")?;
-
-    // Merge by username; a member may exist on one sim only.
-    let mut by_user: BTreeMap<String, Leader> = BTreeMap::new();
-    for e in &poly {
-        if let Some(u) = e.get("username").and_then(|v| v.as_str()) {
-            by_user.entry(u.to_string()).or_default().poly = net(e);
-        }
-    }
-    for e in &kalshi {
-        if let Some(u) = e.get("username").and_then(|v| v.as_str()) {
-            by_user.entry(u.to_string()).or_default().kalshi = net(e);
-        }
-    }
-
-    let mut rows: Vec<Leader> = by_user
-        .into_iter()
-        .map(|(username, mut l)| {
-            l.username = username;
-            l.total = l.poly + l.kalshi;
-            l
+    let mut leaders: Vec<Leader> = rows
+        .iter()
+        .filter_map(|e| {
+            Some(Leader {
+                username: e.get("username").and_then(|v| v.as_str())?.to_string(),
+                net_worth: e.get("net_worth").and_then(|n| n.as_f64()).unwrap_or(0.0),
+            })
         })
         .collect();
-    rows.sort_by(|a, b| b.total.partial_cmp(&a.total).unwrap_or(std::cmp::Ordering::Equal));
-    Ok(rows)
+    leaders.sort_by(|a, b| {
+        b.net_worth
+            .partial_cmp(&a.net_worth)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    Ok(leaders)
 }
 
-/// POST an admin action to one sim. `tolerate_404` makes removal idempotent
-/// (a member already gone from one sim isn't treated as a failure).
-async fn post_admin(
-    url: String,
-    header: &str,
-    secret: String,
-    query: &[(&str, &str)],
-    tolerate_404: bool,
-) -> Result<()> {
+/// POST an admin action to the sim. `tolerate_404` makes removal idempotent.
+async fn post_admin(query: &[(&str, &str)], path: &str, tolerate_404: bool) -> Result<()> {
+    let url = format!("{}{path}", poly_url());
     let resp = reqwest::Client::new()
         .post(&url)
-        .header(header, secret)
+        .header("X-Admin-Secret", admin_secret())
         .query(query)
         .send()
         .await
@@ -497,71 +435,26 @@ async fn post_admin(
         return Ok(());
     }
     resp.error_for_status()
-        .with_context(|| format!("{url} rejected (check admin secret / role)"))?;
+        .with_context(|| format!("{url} rejected (check PREDLAB_ADMIN_SECRET / role)"))?;
     Ok(())
 }
 
-/// Reset one member to the starting balance on both sims (clears positions/orders).
+/// Reset one member to the starting balance (clears positions/orders).
 async fn reset_member(username: &str) -> Result<String> {
-    post_admin(
-        format!("{}/admin/reset-balance", poly_url()),
-        "X-Admin-Secret",
-        admin_secret(),
-        &[("username", username)],
-        false,
-    )
-    .await?;
-    post_admin(
-        format!("{}/trade-api/v2/admin/reset-user", kalshi_url()),
-        "X-Kalshi-Sim-Admin",
-        kalshi_admin_secret(),
-        &[("username", username)],
-        false,
-    )
-    .await?;
-    Ok(format!("♻ Reset {username} to the starting balance on both sims."))
+    post_admin(&[("username", username)], "/admin/reset-balance", false).await?;
+    Ok(format!("♻ Reset {username} to the starting balance."))
 }
 
-/// Reset every member to the starting balance on both sims.
+/// Reset every member to the starting balance.
 async fn reset_all() -> Result<String> {
-    post_admin(
-        format!("{}/admin/reset-balance", poly_url()),
-        "X-Admin-Secret",
-        admin_secret(),
-        &[],
-        false,
-    )
-    .await?;
-    post_admin(
-        format!("{}/trade-api/v2/admin/reset-user", kalshi_url()),
-        "X-Kalshi-Sim-Admin",
-        kalshi_admin_secret(),
-        &[],
-        false,
-    )
-    .await?;
-    Ok("♻ Reset ALL members to the starting balance on both sims.".to_string())
+    post_admin(&[], "/admin/reset-balance", false).await?;
+    Ok("♻ Reset ALL members to the starting balance.".to_string())
 }
 
-/// Permanently delete a member from both sims.
+/// Permanently delete a member from the sim.
 async fn remove_member(username: &str) -> Result<String> {
-    post_admin(
-        format!("{}/admin/delete-user", poly_url()),
-        "X-Admin-Secret",
-        admin_secret(),
-        &[("username", username)],
-        true,
-    )
-    .await?;
-    post_admin(
-        format!("{}/trade-api/v2/admin/delete-user", kalshi_url()),
-        "X-Kalshi-Sim-Admin",
-        kalshi_admin_secret(),
-        &[("username", username)],
-        true,
-    )
-    .await?;
-    Ok(format!("🗑 Removed {username} from both sims and the roster."))
+    post_admin(&[("username", username)], "/admin/delete-user", true).await?;
+    Ok(format!("🗑 Removed {username} from the sim and the roster."))
 }
 
 fn issue_and_save(app: &mut App, rt: &Runtime, conn: &Connection) {
@@ -571,48 +464,29 @@ fn issue_and_save(app: &mut App, rt: &Runtime, conn: &Connection) {
         return;
     }
     let role = app.role().to_string();
-    app.message = format!("Issuing {role} keys for '{username}'…");
+    app.message = format!("Issuing a {role} key for '{username}'…");
 
-    match rt.block_on(issue_both(&username, &role)) {
-        Ok((poly_key, kalshi_key_id, kalshi_private_key)) => {
-            // Persist the Kalshi private key — the server only returns it once.
-            let pem_path = if kalshi_private_key.is_empty() {
-                None
-            } else {
-                save_pem(&username, &kalshi_private_key).ok()
-            };
-
+    match rt.block_on(issue_poly(&username, &role)) {
+        Ok(poly_key) => {
             let student = Student {
                 username: username.clone(),
                 display_name: username.clone(),
                 poly_key: poly_key.clone(),
-                kalshi_key: kalshi_key_id.clone(),
+                kalshi_key: String::new(), // legacy column, unused
                 role: role.clone(),
                 created_at: chrono::Utc::now().to_rfc3339(),
             };
             match registry::save_student(conn, &student) {
                 Ok(()) => {
                     app.students = registry::list_students(conn).unwrap_or_default();
-                    let block = creds_block(
-                        &username,
-                        &role,
-                        &poly_key,
-                        &kalshi_key_id,
-                        pem_path.as_deref(),
-                    );
+                    let block = creds_block(&username, &role, &poly_key);
                     let copied = copy_to_clipboard(&block);
                     app.message = if copied {
-                        format!("✅ Issued {role} keys for {username} — credentials copied to clipboard.")
+                        format!("✅ Issued a {role} key for {username} — credentials copied to clipboard.")
                     } else {
-                        format!("✅ Issued {role} keys for {username}. (Install wl-copy to auto-copy.)")
+                        format!("✅ Issued a {role} key for {username}. (Install wl-copy to auto-copy.)")
                     };
-                    app.last = Some(Issued {
-                        username,
-                        role,
-                        poly_key,
-                        kalshi_key_id,
-                        pem_path,
-                    });
+                    app.last = Some(Issued { username, role, poly_key });
                     app.username.clear();
                 }
                 Err(e) => app.message = format!("Issued, but failed to save to roster: {e}"),
@@ -622,13 +496,9 @@ fn issue_and_save(app: &mut App, rt: &Runtime, conn: &Connection) {
     }
 }
 
-/// Mint a paper key with role `role` on each simulator.
-/// Returns (polymarket_key, kalshi_key_id, kalshi_private_key_pem).
-async fn issue_both(username: &str, role: &str) -> Result<(String, String, String)> {
-    let client = reqwest::Client::new();
-
-    // Polymarket: admin endpoint, gated by X-Admin-Secret (master secret = owner).
-    let poly_resp = client
+/// Mint a Polymarket paper key with role `role`. Returns the API key.
+async fn issue_poly(username: &str, role: &str) -> Result<String> {
+    let resp = reqwest::Client::new()
         .post(format!("{}/admin/create-paper-key", poly_url()))
         .header("X-Admin-Secret", admin_secret())
         .query(&[
@@ -639,89 +509,24 @@ async fn issue_both(username: &str, role: &str) -> Result<(String, String, Strin
         .send()
         .await
         .context("calling polymarket admin/create-paper-key")?;
-    let poly_json: serde_json::Value = poly_resp.json().await.context("parsing poly response")?;
-    let poly_key = poly_json
-        .get("api_key")
+    let json: serde_json::Value = resp.json().await.context("parsing response")?;
+    json.get("api_key")
         .and_then(|v| v.as_str())
         .map(str::to_string)
-        .context("polymarket response missing api_key (check PREDLAB_ADMIN_SECRET / role)")?;
-
-    // Kalshi: generate endpoint (admin-gated) returns an RSA keypair. The private
-    // key is shown ONLY here, so we capture it for the member.
-    let kalshi_resp = client
-        .post(format!("{}/trade-api/v2/api_keys/generate", kalshi_url()))
-        .header("X-Kalshi-Sim-Admin", kalshi_admin_secret())
-        .query(&[("username", username), ("role", role)])
-        .json(&serde_json::json!({ "name": username }))
-        .send()
-        .await
-        .context("calling kalshi api_keys/generate")?;
-    let kalshi_json: serde_json::Value =
-        kalshi_resp.json().await.context("parsing kalshi response")?;
-    let kalshi_key_id = kalshi_json
-        .get("api_key_id")
-        .and_then(|v| v.as_str())
-        .map(str::to_string)
-        .context("kalshi response missing api_key_id (check PREDLAB_KALSHI_SECRET / role)")?;
-    let kalshi_private_key = kalshi_json
-        .get("private_key")
-        .and_then(|v| v.as_str())
-        .unwrap_or_default()
-        .to_string();
-
-    Ok((poly_key, kalshi_key_id, kalshi_private_key))
-}
-
-/// `~/.predlab/keys/<username>.pem` — where a member's Kalshi private key lives.
-fn pem_path_for(username: &str) -> String {
-    let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
-    std::path::Path::new(&home)
-        .join(".predlab")
-        .join("keys")
-        .join(format!("{username}.pem"))
-        .to_string_lossy()
-        .into_owned()
-}
-
-/// Write a member's Kalshi private key to a 0600 file and return its path.
-fn save_pem(username: &str, pem: &str) -> Result<String> {
-    let path = pem_path_for(username);
-    if let Some(parent) = std::path::Path::new(&path).parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-    std::fs::write(&path, pem)?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600));
-    }
-    Ok(path)
+        .context("response missing api_key (check PREDLAB_ADMIN_SECRET / role)")
 }
 
 /// A copy-pasteable credentials block to hand to a member (e.g. via DM).
-fn creds_block(
-    username: &str,
-    role: &str,
-    poly_key: &str,
-    kalshi_key_id: &str,
-    pem_path: Option<&str>,
-) -> String {
-    let mut s = format!(
+fn creds_block(username: &str, role: &str, poly_key: &str) -> String {
+    format!(
         "PredLab credentials for {username} (role: {role})\n\
          \n\
-         Polymarket\n  base URL: {}\n  API key:  {poly_key}\n  → send as the POLY_API_KEY header\n\
+         base URL: {}\n  API key:  {poly_key}\n\
+         → send the key as the POLY_API_KEY header\n\
          \n\
-         Kalshi\n  base URL: {}/trade-api/v2\n  key id:   {kalshi_key_id}\n",
+         Quick start: examples/predlab.py (set POLY_KEY and trade).\n",
         poly_url(),
-        kalshi_url(),
-    );
-    match pem_path {
-        Some(p) => s.push_str(&format!(
-            "  private key file: {p}\n  → needed to sign requests; send this file securely\n"
-        )),
-        None => s.push_str("  (no private key captured — re-issue to get one)\n"),
-    }
-    s
+    )
 }
 
 /// Best-effort clipboard copy via wl-copy (Wayland). Returns false if unavailable.
@@ -752,7 +557,7 @@ fn ui(f: &mut Frame, app: &App) {
         View::Roster => 1,
         View::Leaderboard => 2,
     };
-    let tabs = Tabs::new(vec!["ISSUE KEYS", "ROSTER", "LEADERBOARD"])
+    let tabs = Tabs::new(vec!["ISSUE KEY", "ROSTER", "LEADERBOARD"])
         .block(Block::default().borders(Borders::ALL).title("PREDLAB ADMIN"))
         .select(tab_index)
         .highlight_style(
@@ -802,36 +607,32 @@ fn render_issue(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
         )),
         Line::from(""),
         Line::from(Span::styled(
-            "           ↵ Enter mints keys on both sims and saves the member.",
+            "           ↵ Enter mints a paper key and saves the member.",
             Style::default().fg(Color::Cyan),
         )),
     ])
     .block(
         Block::default()
-            .title("Issue dual paper keys")
+            .title("Issue a paper key")
             .borders(Borders::ALL),
     );
     f.render_widget(form, body[0]);
 
     // --- last issued credentials ---
     let result = match &app.last {
-        Some(l) => {
-            let mut lines = vec![
-                Line::from(Span::styled(
-                    format!("Last issued: {} [{}]", l.username, l.role),
-                    Style::default()
-                        .fg(Color::Green)
-                        .add_modifier(Modifier::BOLD),
-                )),
-                Line::from(format!("  Polymarket key:  {}", l.poly_key)),
-                Line::from(format!("  Kalshi key id:   {}", l.kalshi_key_id)),
-            ];
-            lines.push(match &l.pem_path {
-                Some(p) => Line::from(format!("  Kalshi key file: {p}")),
-                None => Line::from("  Kalshi private key: (not captured)"),
-            });
-            lines
-        }
+        Some(l) => vec![
+            Line::from(Span::styled(
+                format!("Last issued: {} [{}]", l.username, l.role),
+                Style::default()
+                    .fg(Color::Green)
+                    .add_modifier(Modifier::BOLD),
+            )),
+            Line::from(format!("  API key: {}", l.poly_key)),
+            Line::from(Span::styled(
+                "  → send as the POLY_API_KEY header",
+                Style::default().fg(Color::DarkGray),
+            )),
+        ],
         None => vec![Line::from(Span::styled(
             "Issued credentials will appear here and copy to your clipboard.",
             Style::default().fg(Color::DarkGray),
@@ -846,12 +647,11 @@ fn render_issue(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
 }
 
 fn render_roster(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
-    let header = Row::new(["USERNAME", "ROLE", "POLY KEY", "KALSHI KEY", "CREATED"])
-        .style(
-            Style::default()
-                .fg(Color::Green)
-                .add_modifier(Modifier::BOLD),
-        );
+    let header = Row::new(["USERNAME", "ROLE", "API KEY", "CREATED"]).style(
+        Style::default()
+            .fg(Color::Green)
+            .add_modifier(Modifier::BOLD),
+    );
     let rows: Vec<Row> = app
         .students
         .iter()
@@ -859,18 +659,16 @@ fn render_roster(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
             Row::new(vec![
                 Cell::from(s.username.clone()),
                 Cell::from(s.role.clone()),
-                Cell::from(truncate(&s.poly_key, 16)),
-                Cell::from(truncate(&s.kalshi_key, 16)),
+                Cell::from(truncate(&s.poly_key, 28)),
                 Cell::from(truncate(&s.created_at, 19)),
             ])
         })
         .collect();
     let widths = [
+        Constraint::Percentage(26),
+        Constraint::Percentage(14),
+        Constraint::Percentage(38),
         Constraint::Percentage(22),
-        Constraint::Percentage(12),
-        Constraint::Percentage(25),
-        Constraint::Percentage(25),
-        Constraint::Percentage(16),
     ];
     let table = Table::new(rows, widths)
         .header(header)
@@ -895,7 +693,7 @@ fn render_roster(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
 }
 
 fn render_leaderboard(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
-    let header = Row::new(["#", "MEMBER", "POLYMARKET", "KALSHI", "TOTAL"]).style(
+    let header = Row::new(["#", "MEMBER", "NET WORTH"]).style(
         Style::default()
             .fg(Color::Green)
             .add_modifier(Modifier::BOLD),
@@ -916,24 +714,20 @@ fn render_leaderboard(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
             Row::new(vec![
                 Cell::from(format!("{}", i + 1)),
                 Cell::from(l.username.clone()),
-                Cell::from(fmt_money(l.poly)),
-                Cell::from(fmt_money(l.kalshi)),
-                Cell::from(fmt_money(l.total)),
+                Cell::from(fmt_money(l.net_worth)),
             ])
             .style(style)
         })
         .collect();
     let widths = [
         Constraint::Length(4),
-        Constraint::Percentage(28),
-        Constraint::Percentage(23),
-        Constraint::Percentage(23),
-        Constraint::Percentage(23),
+        Constraint::Percentage(55),
+        Constraint::Percentage(40),
     ];
     let title = if app.leaders.is_empty() {
         "Leaderboard — press r to load".to_string()
     } else {
-        format!("Leaderboard — combined net worth ({} members)", app.leaders.len())
+        format!("Leaderboard — paper net worth ({} members)", app.leaders.len())
     };
     let table = Table::new(rows, widths)
         .header(header)

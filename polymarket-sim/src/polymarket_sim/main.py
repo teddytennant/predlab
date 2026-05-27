@@ -38,6 +38,7 @@ from .models.schemas import (
     MidpointOut,
     OrderCreate,
     OrderOut,
+    PortfolioOut,
     PositionWithPnLOut,
     PostOrderResponse,
     SpreadOut,
@@ -54,6 +55,7 @@ from .services.auth import (
 from .services.orderbook import OrderBookEntry, get_orderbook
 from .services.paper_trading import (
     cancel_paper_order,
+    compute_net_worth,
     delete_user,
     force_resolve_market,
     leaderboard,
@@ -489,6 +491,18 @@ def create_app() -> FastAPI:
         """User positions + live mark-to-market P&L using synced prices."""
         raw = list_user_positions_with_pnl(session, user)
         return [PositionWithPnLOut(**p) for p in raw]
+
+    @app.get("/portfolio", response_model=PortfolioOut, tags=["portfolio"])
+    async def get_portfolio(
+        user: User = Depends(get_current_user),
+        session: Session = Depends(get_session),
+    ) -> PortfolioOut:
+        """Authenticated account summary: free cash, position value, net worth.
+
+        Powers the web UI's header balance + portfolio page. Read-only — derives
+        everything from the same accounting the leaderboard uses.
+        """
+        return PortfolioOut(**compute_net_worth(session, user))
 
     @app.get("/user/orders", response_model=list[UserOrderOut], tags=["portfolio"])
     async def get_user_orders(

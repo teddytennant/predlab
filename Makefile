@@ -3,13 +3,13 @@
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-15s\033[0m %s\n", $$1, $$2}'
 
-up: ## Start both simulators with Docker Compose
+up: ## Start the Polymarket simulator + leaderboard with Docker Compose
 	docker compose up -d --build
 
 down: ## Stop all services
 	docker compose down
 
-logs: ## Follow logs from both simulators
+logs: ## Follow logs from the simulator and services
 	docker compose logs -f
 
 admin: ## Run the Rust admin TUI (against running sims)
@@ -18,18 +18,16 @@ admin: ## Run the Rust admin TUI (against running sims)
 install-admin: ## Install the `predlab` admin binary onto your PATH
 	cd ratatui-admin && cargo install --path .
 
-test: test-sims test-admin ## Run every test suite (both sims + admin)
+test: test-sims test-admin ## Run every test suite (sim + admin)
 
-test-sims: ## Run the Python simulator test suites
+test-sims: ## Run the Python simulator test suite
 	cd polymarket-sim && python -m pytest -q
-	cd kalshi-sim && python -m pytest -q
 
 test-admin: ## Run the Rust admin test suite
 	cd ratatui-admin && cargo test
 
 lint: ## Run linters across the repo
 	cd polymarket-sim && ruff check src/ tests/
-	cd kalshi-sim && ruff check src/ tests/
 	cd ratatui-admin && cargo clippy --quiet
 
 clean: ## Remove containers, volumes, and caches

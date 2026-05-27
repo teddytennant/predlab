@@ -124,3 +124,11 @@ class PositionWithPnLOut(BaseModel):
     current_price: float
     unrealized_pnl: float
     market_question: str | None = None
+
+
+class PortfolioOut(BaseModel):
+    """Authenticated account summary: free cash, marked position value, net worth."""
+
+    cash: float
+    positions_value: float
+    net_worth: float
