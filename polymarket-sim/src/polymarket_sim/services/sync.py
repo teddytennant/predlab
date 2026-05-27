@@ -1,11 +1,9 @@
 """
-Stub data sync service.
+Live market sync service.
 
-Periodically (or on-demand) fetches live markets from the real Gamma public API
-and upserts them into our local DB so that /markets returns real, up-to-date data
-(approximately 20 active markets with current outcomePrices, bestBid/Ask, etc.).
-
-Phase 1: simple one-shot sync at startup + manual trigger. Background loop added later.
+Pages the real Gamma public API (volume-descending) and upserts the liquid
+catalog into our local DB so /markets returns real, current data. Driven by the
+app's startup sync plus a periodic background refresh loop (see main.lifespan).
 """
 
 from __future__ import annotations
@@ -19,6 +17,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from ..clients.gamma import GammaClient
+from ..config import settings
 from ..models.db import Market
 
 logger = logging.getLogger(__name__)
@@ -57,11 +56,22 @@ def _safe_float(val: Any) -> float | None:
         return None
 
 
-async def sync_markets_from_gamma(db: Session, limit: int = 1000) -> int:
-    """Fetch from Gamma and upsert into local Market table. Returns count upserted."""
+async def sync_markets_from_gamma(db: Session, *, max_markets: int | None = None) -> int:
+    """Fetch the liquid catalog from Gamma and upsert into the Market table.
+
+    ``max_markets`` caps how many to pull this pass (defaults to
+    ``settings.sync_max_markets``); pass a small value for a fast startup sync.
+    Returns the number of markets upserted/updated.
+    """
+    cap = settings.sync_max_markets if max_markets is None else max_markets
     client = GammaClient()
     try:
-        raw_markets = await client.fetch_active_markets(limit=limit)
+        raw_markets = await client.fetch_markets_by_volume(
+            min_volume=settings.sync_min_volume,
+            max_markets=cap,
+            page_size=settings.sync_page_size,
+            pace_seconds=settings.sync_pace_seconds,
+        )
     finally:
         await client.close()
 

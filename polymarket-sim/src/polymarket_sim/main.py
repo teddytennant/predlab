@@ -17,9 +17,10 @@ Run with:
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from datetime import datetime
 from typing import Any
 
@@ -83,12 +84,14 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # 1. Ensure DB tables exist
     init_db()
 
-    # 2. One-time initial sync of live markets
+    # 2. Quick startup sync of the most-liquid slice so /markets has fresh data
+    #    immediately; the background loop below pulls the full catalog after.
     from .db import SessionLocal
 
     db = SessionLocal()
     try:
-        count = await sync_markets_from_gamma(db, limit=30)
+        startup_cap = min(settings.sync_max_markets, 500)
+        count = await sync_markets_from_gamma(db, max_markets=startup_cap)
         logger.info("Initial market sync complete: %d markets loaded", count)
 
         # 3. Hydrate in-memory orderbooks from any open DB orders (survive restart)
@@ -103,8 +106,40 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     finally:
         db.close()
 
-    yield
-    logger.info("Shutting down polymarket-sim")
+    # 5. Background loop keeps the full liquid catalog fresh without blocking startup.
+    sync_task = asyncio.create_task(_periodic_market_sync())
+
+    try:
+        yield
+    finally:
+        sync_task.cancel()
+        with suppress(asyncio.CancelledError):
+            await sync_task
+        logger.info("Shutting down polymarket-sim")
+
+
+async def _periodic_market_sync() -> None:
+    """Re-sync the full liquid catalog every ``sync_interval_seconds``.
+
+    Runs an immediate full sync first (startup only loaded a quick top slice),
+    then loops. A failed cycle is logged and retried next interval; shutdown
+    cancellation propagates out cleanly.
+    """
+    from .db import SessionLocal
+
+    settings = get_settings()
+    while True:
+        db = SessionLocal()
+        try:
+            count = await sync_markets_from_gamma(db)
+            logger.info("Background market sync: %d markets refreshed", count)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            logger.exception("Background market sync failed (will retry): %s", exc)
+        finally:
+            db.close()
+        await asyncio.sleep(settings.sync_interval_seconds)
 
 
 def _hydrate_orderbooks_from_db(db: Session) -> None:
@@ -199,10 +234,14 @@ def create_app() -> FastAPI:
         q: str | None = None,  # simple search stub on question
         session: Session = Depends(get_session),
     ) -> list[MarketOut]:
-        """Full GET /markets with filters and pagination stub.
+        """Full GET /markets with filters and pagination.
 
         Returns real live data from Gamma sync. Shape matches real Gamma for SDKs.
+        Use ``offset`` to page through the full catalog; ``limit`` is clamped to
+        ``markets_max_limit`` so a single request can't pull the whole table.
         """
+        limit = max(1, min(limit, get_settings().markets_max_limit))
+        offset = max(0, offset)
         stmt = select(Market)
         if active:
             stmt = stmt.where(Market.active, ~Market.closed)
@@ -243,8 +282,10 @@ def create_app() -> FastAPI:
 
         client = GammaClient()
         try:
-            raw = await client.fetch_active_markets(limit=limit)  # reuse; real /events similar
-            # For true events one would add fetch_events to client; stub returns markets for now
+            # Stub: real /events would add fetch_events; reuse the markets feed for now.
+            raw = await client.fetch_markets_by_volume(
+                min_volume=0, max_markets=limit, page_size=min(max(limit, 1), 100), pace_seconds=0
+            )
             return raw[:limit]
         except Exception as exc:
             logger.warning("Events fetch failed: %s", exc)

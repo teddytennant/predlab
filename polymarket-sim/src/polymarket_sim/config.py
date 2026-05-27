@@ -21,9 +21,22 @@ class Settings(BaseSettings):
     # Database
     database_url: str = "sqlite:///./data/polymarket.db"
 
-    # Data sync from real Polymarket Gamma API
+    # Data sync from real Polymarket Gamma API.
     gamma_api_base: str = "https://gamma-api.polymarket.com"
-    sync_interval_seconds: int = 60
+    # How often the background loop re-syncs the live catalog (seconds).
+    sync_interval_seconds: int = 300
+    # Only carry markets at/above this 24h-ish dollar volume. Gamma is sorted
+    # volume-descending, so we stop paging once we drop below this.
+    sync_min_volume: float = 1000.0
+    # Upper bound on how many markets to carry. Gamma also hard-caps paging
+    # around offset 10k, so this is the practical ceiling either way.
+    sync_max_markets: int = 8000
+    # Gamma caps each page at 100 regardless of the limit we ask for.
+    sync_page_size: int = 100
+    # Politeness delay between Gamma page requests (seconds) to avoid throttling.
+    sync_pace_seconds: float = 0.25
+    # Hard cap on the `limit` a client may request from GET /markets.
+    markets_max_limit: int = 500
 
     # Paper money
     starting_balance_usd: float = 25000.00
