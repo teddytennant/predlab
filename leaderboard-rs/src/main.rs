@@ -18,12 +18,22 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
-use axum::{extract::State, response::Html, routing::get, Router};
+use axum::{
+    extract::State,
+    http::header,
+    response::{Html, IntoResponse},
+    routing::get,
+    Router,
+};
 
 /// How long a rendered page is reused before we re-fetch the sim.
 const CACHE_TTL: Duration = Duration::from_secs(15);
 /// Browser auto-refresh interval (seconds) baked into the page.
 const REFRESH_SECS: u32 = 30;
+
+/// The member client, embedded at build time from `examples/predlab.py` (see
+/// build.rs) and served as a download at `/predlab.py`.
+const CLIENT_PY: &str = include_str!(concat!(env!("OUT_DIR"), "/predlab_client.py"));
 
 #[derive(Clone, Default)]
 struct Leader {
@@ -70,6 +80,7 @@ async fn main() -> Result<()> {
     let state = AppState::from_env();
     let app = Router::new()
         .route("/", get(index))
+        .route("/predlab.py", get(client_py))
         .route("/healthz", get(|| async { "ok" }))
         .with_state(state);
 
@@ -102,6 +113,17 @@ async fn index(State(st): State<AppState>) -> Html<String> {
         c.at = Some(Instant::now());
     }
     Html(html)
+}
+
+/// Serve the embedded member client as a file download.
+async fn client_py() -> impl IntoResponse {
+    (
+        [
+            (header::CONTENT_TYPE, "text/x-python; charset=utf-8"),
+            (header::CONTENT_DISPOSITION, "attachment; filename=\"predlab.py\""),
+        ],
+        CLIENT_PY,
+    )
 }
 
 /// Fetch the sim's per-user net worth, dropping excluded (staff/seed) usernames.
@@ -233,27 +255,66 @@ fn build_table(headers: &[&str], aligns: &[Align], rows: &[Vec<String>]) -> Stri
 
 const STYLE: &str = r#"
 :root { color-scheme: dark; }
-html, body { margin: 0; height: 100%; background: #000; }
+html, body { margin: 0; min-height: 100%; background: #000; }
 body {
   display: flex; align-items: flex-start; justify-content: center;
   padding: 48px 16px;
-}
-pre {
-  margin: 0;
   font-family: "DejaVu Sans Mono", "SFMono-Regular", ui-monospace, Menlo, Consolas, monospace;
+  color: #f0f0f0;
+}
+main { display: flex; flex-direction: column; align-items: stretch; gap: 30px; width: 100%; max-width: 680px; }
+pre.board {
+  margin: 0;
   font-size: 14px;
   /* line-height: 1 so the box-drawing chars touch and form continuous lines */
   line-height: 1;
-  color: #f0f0f0;
   white-space: pre;
+  overflow-x: auto;
 }
 .dim { color: #666; }
-@media (max-width: 640px) { pre { font-size: 11px; } }
+a { color: #8ab4ff; }
+.onboard { font-size: 14px; line-height: 1.55; }
+.onboard h2 { font-size: 14px; font-weight: normal; margin: 0 0 12px; }
+.onboard ol { margin: 0; padding-left: 1.5em; }
+.onboard li { margin: 7px 0; }
+.onboard code { color: #d7d7d7; }
+.btn {
+  display: inline-block; margin-left: 6px;
+  border: 1px solid #f0f0f0; color: #f0f0f0; text-decoration: none;
+  padding: 4px 12px; border-radius: 3px; font-weight: bold;
+}
+.btn:hover { background: #f0f0f0; color: #000; }
+pre.snippet {
+  margin: 10px 0 0; font-size: 13px; line-height: 1.45; white-space: pre;
+  background: #0c0c0c; border: 1px solid #222; border-radius: 4px;
+  padding: 12px 14px; overflow-x: auto; color: #d7d7d7;
+}
+@media (max-width: 640px) { pre.board { font-size: 11px; } }
 "#;
+
+/// Onboarding block shown under the board: how a student goes from zero to
+/// trading, with a one-click download of the client served from this domain.
+const ONBOARD: &str = r##"<section class="onboard">
+<h2><span class="dim">$</span> new here? start trading in 4 steps</h2>
+<ol>
+<li>Ask a club admin for your <strong>API key</strong> (it looks like <code>pm_paper_…</code>). You start with $25,000 of paper money.</li>
+<li>Download the one-file client:<a class="btn" href="/predlab.py" download="predlab.py">⬇ predlab.py</a></li>
+<li>Install its only dependency: <code>pip install requests</code></li>
+<li>Drop in your key and trade:</li>
+</ol>
+<pre class="snippet">from predlab import PolymarketClient
+
+poly = PolymarketClient(api_key="pm_paper_…")    # your key
+print(poly.markets(limit=5))                     # browse markets
+yes_token = poly.markets(limit=1)[0]["clobTokenIds"][0]
+poly.place_order(token_id=yes_token, side="BUY", price=0.55, size=10)
+print(poly.positions())                          # what you now hold</pre>
+<p class="dim">paper trading only · full step-by-step guide → <a href="https://github.com/teddytennant/predlab#getting-started-members">github.com/teddytennant/predlab</a></p>
+</section>"##;
 
 /// Wrap a pre-rendered table (or message) in the terminal-style page chrome.
 fn page_shell(table_text: &str) -> String {
-    let content = format!(
+    let board = format!(
         "<span class=\"dim\">$</span> predlab leaderboard\n\n{}\n\n\
          <span class=\"dim\"># paper net worth · refreshes every {}s · paper trading only</span>",
         esc(table_text),
@@ -269,11 +330,12 @@ fn page_shell(table_text: &str) -> String {
 <title>predlab · leaderboard</title>
 <style>{style}</style>
 </head>
-<body><main><pre>{content}</pre></main></body>
+<body><main><pre class="board">{board}</pre>{onboard}</main></body>
 </html>"#,
         refresh = REFRESH_SECS,
         style = STYLE,
-        content = content,
+        board = board,
+        onboard = ONBOARD,
     )
 }
 
@@ -335,6 +397,22 @@ mod tests {
     #[test]
     fn empty_roster_renders_placeholder() {
         assert!(render_page(&[]).contains("no members yet"));
+    }
+
+    #[test]
+    fn page_has_onboarding_and_download_button() {
+        let html = render_page(&[leader("alice", 25000.0)]);
+        assert!(html.contains("start trading in 4 steps"));
+        assert!(html.contains(r#"href="/predlab.py""#));
+        assert!(html.contains("download=\"predlab.py\""));
+        assert!(html.contains("pip install requests"));
+    }
+
+    #[test]
+    fn embedded_client_is_the_real_one() {
+        // build.rs pulls in examples/predlab.py; sanity-check it embedded.
+        assert!(CLIENT_PY.contains("PolymarketClient"));
+        assert!(CLIENT_PY.len() > 500);
     }
 
     #[test]

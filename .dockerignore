@@ -1,0 +1,12 @@
+# Keep the leaderboard build context (repo root) small. The leaderboard build
+# only needs leaderboard-rs/ + examples/predlab.py.
+.git
+**/target
+**/.venv
+**/__pycache__
+**/.pytest_cache
+**/.ruff_cache
+**/.mypy_cache
+**/*.db
+**/data
+**/node_modules
