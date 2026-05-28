@@ -603,7 +603,13 @@ def get_user_detail(
         "display_name": user.display_name,
         "role": user.role,
         **compute_net_worth(db, user),
-        "positions": list_user_positions_with_pnl(db, user),
+        # ``list_user_positions_with_pnl`` returns ``size`` as Decimal (the raw
+        # column type), which FastAPI serialises as a JSON string. Cast it so
+        # the leaderboard's typed JSON deserialiser can read a number here.
+        "positions": [
+            {**p, "size": float(p["size"])}
+            for p in list_user_positions_with_pnl(db, user)
+        ],
         "trades": [
             {
                 "id": t.id,

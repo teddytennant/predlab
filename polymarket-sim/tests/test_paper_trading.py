@@ -196,6 +196,9 @@ def test_record_snapshot_and_user_detail_for_profile_page(session, market, start
     # Position is exposed with P&L.
     assert len(detail["positions"]) == 1
     assert detail["positions"][0]["size"] == pytest.approx(10)
+    # The numeric fields must be JSON numbers, not Decimal/str — the Rust
+    # leaderboard deserialises into typed f64 and would 500 on a string.
+    assert isinstance(detail["positions"][0]["size"], float)
     # History has at least the seed point + the fill snapshot, and the latest
     # point matches current net worth.
     assert len(detail["history"]) >= 2
