@@ -290,8 +290,9 @@ def place_paper_order(
         )
         db.add(trade)
 
-        # Accounting for the taker (incoming) order...
-        _process_fill_accounting(db, user, market, clob_token_id, f_size, f_price, f_side, order)
+        # Accounting for the taker (incoming) order. The taker escrowed ``exec_price``
+        # per share at placement (limit price, or the mark for a market order).
+        _process_fill_accounting(db, user, market, clob_token_id, f_size, f_price, f_side, exec_price)
         # ...and the resting maker on the other side of the same fill.
         _settle_resting_counterparty(db, market, clob_token_id, f, f_side)
 
@@ -306,8 +307,8 @@ def place_paper_order(
     else:
         order.status = "open"
 
-    # If buy limit and not fully filled, the escrow for remaining is already deducted
-    # (we only deducted full at place; on partial we don't refund partial escrow here - kept simple)
+    # On a partial fill the filled portion was reconciled above; the escrow for the
+    # remaining (resting) size stays reserved and is refunded when it cancels.
 
     db.commit()
     db.refresh(order)
@@ -325,20 +326,24 @@ def _process_fill_accounting(
     fill_size: float,
     fill_price: float,
     side: str,
-    order: Order,
+    escrow_price: float,
 ) -> None:
     """
     Core double-entry for paper:
-    - BUY fill: position up, cash already escrowed so no further deduction (or adjust)
-    - SELL fill: position down, cash credit
+    - BUY fill: position up; cash was already escrowed at ``escrow_price`` when the
+      order was placed, so here we only reconcile the difference against the actual
+      ``fill_price``. A buy that crosses a cheaper resting ask (fill < escrow) is
+      refunded the slack; a market buy that walks up the book (fill > escrow) is
+      charged the extra. Net effect: cash + escrow + position value is conserved.
+    - SELL fill: position down, cash credit (sells reserve no escrow).
     """
     if side == "buy":
-        # Position increases (we already escrowed the notional at place time for limits)
         update_position_on_fill(db, user, market, clob_token_id, fill_size, fill_price, "buy")
-        # For market orders we deduct here instead
-        if order.order_type == "market":
-            notional = fill_price * fill_size
-            _adjust_balance(db, user, -notional, f"market buy fill {fill_size}@{fill_price}")
+        # Escrow reserved ``escrow_price`` per share at placement; settle vs the fill.
+        # Positive delta => over-reserved, refund; negative => crossed up, charge more.
+        delta = (escrow_price - fill_price) * fill_size
+        if abs(delta) > 1e-9:
+            _adjust_balance(db, user, delta, f"escrow reconcile buy fill {fill_size}@{fill_price}")
     else:
         # SELL: credit cash, reduce position
         credit = fill_price * fill_size
@@ -374,6 +379,8 @@ def _settle_resting_counterparty(
     f_price = float(fill["price"])
     f_size = float(fill["size"])
     maker_side = "sell" if taker_side == "buy" else "buy"
+    # A resting buy maker escrowed at its own limit price; the fill settles against that.
+    maker_escrow = float(maker_order.price) if maker_order.price is not None else f_price
 
     db.add(
         Trade(
@@ -386,7 +393,7 @@ def _settle_resting_counterparty(
             side=maker_side,
         )
     )
-    _process_fill_accounting(db, maker_user, market, clob_token_id, f_size, f_price, maker_side, maker_order)
+    _process_fill_accounting(db, maker_user, market, clob_token_id, f_size, f_price, maker_side, maker_escrow)
 
     filled = float(maker_order.filled_size or 0.0) + f_size
     maker_order.filled_size = min(float(maker_order.size), filled)
@@ -467,15 +474,45 @@ def list_user_positions_with_pnl(db: Session, user: User) -> list[dict[str, Any]
 # ---------------------------------------------------------------------------
 
 
+def _escrow_price_for_buy(db: Session, order: Order) -> float:
+    """Per-share cash a resting buy order reserved at placement.
+
+    Limit buys reserve their limit price; a market buy (no limit price) reserved the
+    mark, which we re-derive from current market data.
+    """
+    if order.price is not None:
+        return float(order.price)
+    if order.clob_token_id is None:
+        return 0.5
+    return _current_price_for_token(db, order.clob_token_id)
+
+
 def compute_net_worth(db: Session, user: User) -> dict[str, float]:
-    """Total paper net worth = free cash + open positions marked to current price."""
+    """Total paper net worth = free cash + escrow locked in resting buys + positions marked.
+
+    Cash reserved in open buy orders was debited from the free balance at placement,
+    so it must be counted here too — otherwise resting orders silently shrink net worth.
+    """
     cash = float(ensure_paper_account(db, user).balance_usd)
     positions = db.execute(select(Position).where(Position.user_id == user.id)).scalars().all()
     pos_value = sum(float(p.size) * _current_price_for_token(db, p.clob_token_id) for p in positions)
+
+    open_buys = db.execute(
+        select(Order).where(
+            Order.user_id == user.id,
+            Order.side == "buy",
+            Order.status.in_(["open", "partial"]),
+        )
+    ).scalars().all()
+    open_orders_value = sum(
+        _escrow_price_for_buy(db, o) * (float(o.size) - float(o.filled_size)) for o in open_buys
+    )
+
     return {
         "cash": round(cash, 2),
         "positions_value": round(pos_value, 2),
-        "net_worth": round(cash + pos_value, 2),
+        "open_orders_value": round(open_orders_value, 2),
+        "net_worth": round(cash + pos_value + open_orders_value, 2),
     }
 
 

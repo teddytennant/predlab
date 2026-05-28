@@ -7,6 +7,7 @@ import pytest
 from polymarket_sim.services.auth import create_demo_user_with_key, ensure_paper_account
 from polymarket_sim.services.paper_trading import (
     cancel_paper_order,
+    compute_net_worth,
     force_resolve_market,
     get_or_create_position,
     place_paper_order,
@@ -123,6 +124,51 @@ def test_vwap_average_entry_updates_across_fills(session, market):
     update_position_on_fill(session, alice, market, TOKEN_YES, 5, 0.55, "sell")
     assert float(pos.size) == 15
     assert float(pos.avg_entry_price) == pytest.approx(0.50)
+
+
+def test_net_worth_counts_cash_escrowed_in_open_buys(session, market, starting_balance):
+    """A resting buy must not shrink net worth: escrowed cash is still the user's money."""
+    alice = _user(session, "alice")
+    place_paper_order(session, alice, market.id, TOKEN_YES, side="buy", price=0.40, size=5)
+
+    nw = compute_net_worth(session, alice)
+    # Free cash dropped by the $2 escrow, but it reappears as open_orders_value.
+    assert nw["cash"] == pytest.approx(starting_balance - 2.0)
+    assert nw["positions_value"] == pytest.approx(0.0)
+    assert nw["open_orders_value"] == pytest.approx(2.0)
+    assert nw["net_worth"] == pytest.approx(starting_balance)
+
+
+def test_limit_buy_filling_below_limit_refunds_over_escrow(session, market, starting_balance):
+    """Buying through a cheaper ask must refund the escrow slack (limit - fill)."""
+    maker = _user(session, "maker")
+    taker = _user(session, "taker")
+    place_paper_order(session, maker, market.id, TOKEN_YES, side="sell", price=0.30, size=10)
+    # Escrows 0.50*10 = 5.0 but fills at the maker's 0.30 -> 2.0 must come back.
+    place_paper_order(session, taker, market.id, TOKEN_YES, side="buy", price=0.50, size=10)
+
+    # Cash debited is the actual fill cost (3.0), not the 5.0 escrow (the bug).
+    assert _balance(session, taker) == pytest.approx(starting_balance - 0.30 * 10)
+    # Net worth = remaining cash + position marked at the 0.50 mid (a real +2 paper gain).
+    expected_nw = (starting_balance - 0.30 * 10) + 0.50 * 10
+    assert compute_net_worth(session, taker)["net_worth"] == pytest.approx(expected_nw)
+
+
+def test_market_buy_is_not_double_charged(session, make_market, starting_balance):
+    """Market buys escrow at the mark then reconcile to the fill — never charged twice."""
+    # Mark = mid = 0.50; a maker rests an ask well below it.
+    mkt = make_market(session, market_id="2", best_bid=0.5, best_ask=0.5)
+    maker = _user(session, "maker")
+    taker = _user(session, "taker")
+    place_paper_order(session, maker, mkt.id, TOKEN_YES, side="sell", price=0.30, size=10)
+    # price=None => market order. Old bug: escrow(5.0) + fill debit(3.0) = lost $5.
+    order = place_paper_order(session, taker, mkt.id, TOKEN_YES, side="buy", price=None, size=10)
+
+    assert order.status == "filled"
+    # Only the actual fill cost (3.0) leaves cash — not escrow(5) + a second fill debit(3).
+    assert _balance(session, taker) == pytest.approx(starting_balance - 0.30 * 10)
+    expected_nw = (starting_balance - 0.30 * 10) + 0.50 * 10
+    assert compute_net_worth(session, taker)["net_worth"] == pytest.approx(expected_nw)
 
 
 def test_force_resolve_yes_pays_winning_holders_one_dollar_per_share(session, market):

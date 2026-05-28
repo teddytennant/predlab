@@ -131,4 +131,5 @@ class PortfolioOut(BaseModel):
 
     cash: float
     positions_value: float
+    open_orders_value: float = 0.0  # cash escrowed in resting buy orders
     net_worth: float
