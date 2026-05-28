@@ -245,3 +245,28 @@ class Position(Base):
         ),
         Index("ix_positions_user", "user_id"),
     )
+
+
+class NetWorthSnapshot(Base):
+    """A point on a user's net-worth-over-time curve (for the profile graph).
+
+    Recorded on a periodic tick and after account-changing events (fills,
+    settlement, reset). Mark-to-market net worth = cash + escrow + positions.
+    """
+
+    __tablename__ = "net_worth_snapshots"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    )
+
+    net_worth: Mapped[float] = mapped_column(Numeric(18, 6), nullable=False)
+    cash: Mapped[float] = mapped_column(Numeric(18, 6), nullable=False)
+    positions_value: Mapped[float] = mapped_column(Numeric(18, 6), nullable=False)
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.now(), nullable=False, index=True
+    )
+
+    __table_args__ = (Index("ix_snapshots_user_time", "user_id", "created_at"),)

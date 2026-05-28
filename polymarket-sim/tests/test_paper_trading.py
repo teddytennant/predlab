@@ -10,7 +10,11 @@ from polymarket_sim.services.paper_trading import (
     compute_net_worth,
     force_resolve_market,
     get_or_create_position,
+    get_user_detail,
     place_paper_order,
+    record_all_snapshots,
+    record_snapshot,
+    reset_user_to_starting,
     update_position_on_fill,
 )
 
@@ -169,6 +173,51 @@ def test_market_buy_is_not_double_charged(session, make_market, starting_balance
     assert _balance(session, taker) == pytest.approx(starting_balance - 0.30 * 10)
     expected_nw = (starting_balance - 0.30 * 10) + 0.50 * 10
     assert compute_net_worth(session, taker)["net_worth"] == pytest.approx(expected_nw)
+
+
+def test_record_snapshot_and_user_detail_for_profile_page(session, market, starting_balance):
+    """The /admin/user/{name} pipeline: snapshots, positions, trades all wired."""
+    maker = _user(session, "maker")
+    taker = _user(session, "taker")
+    # An initial snapshot per user (what startup seeds).
+    record_all_snapshots(session)
+
+    place_paper_order(session, maker, market.id, TOKEN_YES, side="sell", price=0.30, size=10)
+    place_paper_order(session, taker, market.id, TOKEN_YES, side="buy", price=0.50, size=10)
+    # The taker-fill path snapshots automatically; this confirms the maker hook too.
+    detail = get_user_detail(session, "taker")
+    assert detail is not None
+    assert detail["username"] == "taker"
+    assert detail["net_worth"] == pytest.approx(
+        (starting_balance - 0.30 * 10) + 0.50 * 10
+    )
+    # Trades reflect the fill (one buy on the taker's side).
+    assert len(detail["trades"]) == 1 and detail["trades"][0]["side"] == "buy"
+    # Position is exposed with P&L.
+    assert len(detail["positions"]) == 1
+    assert detail["positions"][0]["size"] == pytest.approx(10)
+    # History has at least the seed point + the fill snapshot, and the latest
+    # point matches current net worth.
+    assert len(detail["history"]) >= 2
+    assert detail["history"][-1]["net_worth"] == pytest.approx(detail["net_worth"])
+
+
+def test_reset_records_a_snapshot_so_graph_drops_to_starting(session, market, starting_balance):
+    """A reset is a real net-worth event — the graph must show the cliff."""
+    alice = _user(session, "alice")
+    place_paper_order(session, alice, market.id, TOKEN_YES, side="buy", price=0.40, size=5)
+    record_snapshot(session, alice)  # explicit pre-reset point
+    reset_user_to_starting(session, alice, starting_balance)
+
+    detail = get_user_detail(session, "alice")
+    assert detail is not None
+    assert detail["net_worth"] == pytest.approx(starting_balance)
+    # Last snapshot reflects the post-reset cliff back to the starting balance.
+    assert detail["history"][-1]["net_worth"] == pytest.approx(starting_balance)
+
+
+def test_get_user_detail_returns_none_for_unknown_user(session):
+    assert get_user_detail(session, "no-such-member") is None
 
 
 def test_force_resolve_yes_pays_winning_holders_one_dollar_per_share(session, market):

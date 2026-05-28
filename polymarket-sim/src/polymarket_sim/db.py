@@ -49,6 +49,7 @@ def init_db() -> None:
     from .models.db import (  # noqa: F401
         ApiKey,
         Market,
+        NetWorthSnapshot,
         Order,
         PaperAccount,
         Position,

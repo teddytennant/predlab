@@ -59,10 +59,12 @@ from .services.paper_trading import (
     compute_net_worth,
     delete_user,
     force_resolve_market,
+    get_user_detail,
     leaderboard,
     list_user_open_orders,
     list_user_positions_with_pnl,
     place_paper_order,
+    record_all_snapshots,
     reset_all_to_starting,
     reset_user_to_starting,
 )
@@ -98,7 +100,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         _hydrate_orderbooks_from_db(db)
         logger.info("Orderbooks hydrated from persisted open orders")
 
-        # 4. Optional: in dev, ensure at least one demo paper user exists
+        # 4. Seed a net-worth snapshot per user so each profile graph has a starting point.
+        snap_count = record_all_snapshots(db)
+        logger.info("Startup snapshot recorded for %d users", snap_count)
+
+        # 5. Optional: in dev, ensure at least one demo paper user exists
         if settings.is_dev:
             _ensure_dev_demo_user(db)
     except Exception as exc:
@@ -133,6 +139,10 @@ async def _periodic_market_sync() -> None:
         try:
             count = await sync_markets_from_gamma(db)
             logger.info("Background market sync: %d markets refreshed", count)
+            # After marks refresh, snapshot everyone so the profile graphs pick up
+            # mark-to-market drift even when no one is trading.
+            snap_count = record_all_snapshots(db)
+            logger.info("Periodic snapshot recorded for %d users", snap_count)
         except asyncio.CancelledError:
             raise
         except Exception as exc:
@@ -738,6 +748,18 @@ def create_app() -> FastAPI:
     ) -> list[dict[str, Any]]:
         """Club standings: every user ranked by paper net worth (admin only)."""
         return leaderboard(session)
+
+    @app.get("/admin/user/{username}", tags=["admin"])
+    async def admin_user_detail(
+        username: str,
+        _: Principal = Depends(require_role("admin")),
+        session: Session = Depends(get_session),
+    ) -> dict[str, Any]:
+        """One member's full profile: net worth, positions, trades, history graph."""
+        detail = get_user_detail(session, username)
+        if detail is None:
+            raise HTTPException(404, "user not found")
+        return detail
 
     # Legacy stub kept for Phase 1 scripts
     @app.post("/orders", response_model=OrderOut, status_code=201, tags=["trading", "legacy"])

@@ -19,12 +19,13 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 use axum::{
-    extract::State,
+    extract::{Path, State},
     http::header,
     response::{Html, IntoResponse},
     routing::get,
     Router,
 };
+use serde::Deserialize;
 
 /// How long a rendered page is reused before we re-fetch the sim.
 const CACHE_TTL: Duration = Duration::from_secs(15);
@@ -38,6 +39,55 @@ const CLIENT_PY: &str = include_str!(concat!(env!("OUT_DIR"), "/predlab_client.p
 #[derive(Clone, Default)]
 struct Leader {
     username: String,
+    net_worth: f64,
+}
+
+/// Shape returned by the sim's `/admin/user/{name}` endpoint — the data the
+/// per-user profile page renders (current breakdown + positions + trades +
+/// the net-worth history series for the graph).
+#[derive(Debug, Deserialize)]
+struct UserDetail {
+    username: String,
+    #[serde(default)]
+    role: String,
+    cash: f64,
+    positions_value: f64,
+    #[serde(default)]
+    open_orders_value: f64,
+    net_worth: f64,
+    #[serde(default)]
+    positions: Vec<DetailPosition>,
+    #[serde(default)]
+    trades: Vec<DetailTrade>,
+    #[serde(default)]
+    history: Vec<HistoryPoint>,
+}
+
+#[derive(Debug, Deserialize)]
+struct DetailPosition {
+    market_id: String,
+    #[serde(default)]
+    market_question: Option<String>,
+    size: f64,
+    #[serde(default)]
+    avg_entry_price: Option<f64>,
+    current_price: f64,
+    unrealized_pnl: f64,
+}
+
+#[derive(Debug, Deserialize)]
+struct DetailTrade {
+    market_id: String,
+    side: String,
+    price: f64,
+    size: f64,
+    created_at: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct HistoryPoint {
+    #[serde(rename = "t")]
+    at: String,
     net_worth: f64,
 }
 
@@ -81,6 +131,7 @@ async fn main() -> Result<()> {
     let app = Router::new()
         .route("/", get(index))
         .route("/start", get(start))
+        .route("/u/:username", get(profile))
         .route("/predlab.py", get(client_py))
         .route("/healthz", get(|| async { "ok" }))
         .with_state(state);
@@ -193,6 +244,21 @@ fn esc(s: &str) -> String {
         .replace('"', "&quot;")
 }
 
+/// Percent-encode anything outside the URL path-safe set so `/u/{name}`
+/// survives unusual usernames intact.
+fn url_path_encode(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for b in s.bytes() {
+        match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'.' | b'_' | b'~' | b'-' => {
+                out.push(b as char)
+            }
+            _ => out.push_str(&format!("%{b:02X}")),
+        }
+    }
+    out
+}
+
 fn truncate(s: &str, max: usize) -> String {
     if s.chars().count() <= max {
         s.to_string()
@@ -296,6 +362,16 @@ pre.snippet {
   background: #0c0c0c; border: 1px solid #222; border-radius: 4px;
   padding: 12px 14px; overflow-x: auto; color: #d7d7d7;
 }
+svg.chart {
+  display: block; width: 100%; max-width: 100%; height: auto;
+  background: #050505; border: 1px solid #1a1a1a; border-radius: 3px;
+  margin: 4px 0 14px;
+}
+.chart-empty {
+  font-size: 13px; padding: 28px 14px; text-align: center;
+  background: #050505; border: 1px solid #1a1a1a; border-radius: 3px;
+  margin: 4px 0 14px;
+}
 @media (max-width: 640px) { pre.board { font-size: 11px; } }
 "#;
 
@@ -346,13 +422,15 @@ fn document(title: &str, refresh: Option<u32>, body: &str) -> String {
     )
 }
 
-/// Wrap a pre-rendered table (or message) in the leaderboard page chrome, with
-/// a link out to the get-started page.
-fn page_shell(table_text: &str) -> String {
+/// Wrap pre-escaped (or pre-built) HTML in the leaderboard page chrome with a
+/// link out to the get-started page. The caller is responsible for escaping
+/// any user-supplied text inside ``board_inner`` — this lets ``render_page``
+/// inject ``<a>`` links into the table after escaping it.
+fn page_shell(board_inner: &str) -> String {
     let board = format!(
         "<span class=\"dim\">$</span> predlab leaderboard\n\n{}\n\n\
-         <span class=\"dim\"># paper net worth · refreshes every {}s · paper trading only</span>",
-        esc(table_text),
+         <span class=\"dim\"># click a member to see their graph · refreshes every {}s · paper trading only</span>",
+        board_inner,
         REFRESH_SECS,
     );
     let body = format!(
@@ -370,15 +448,16 @@ fn render_start_page() -> String {
 
 fn render_page(rows: &[Leader]) -> String {
     if rows.is_empty() {
-        return page_shell("  (no members yet — check back once keys are issued)");
+        return page_shell(&esc("  (no members yet — check back once keys are issued)"));
     }
+    let displays: Vec<String> = rows.iter().map(|l| truncate(&l.username, 28)).collect();
     let data: Vec<Vec<String>> = rows
         .iter()
         .enumerate()
         .map(|(i, l)| {
             vec![
                 (i + 1).to_string(),
-                truncate(&l.username, 28),
+                displays[i].clone(),
                 fmt_money(l.net_worth),
             ]
         })
@@ -388,11 +467,292 @@ fn render_page(rows: &[Leader]) -> String {
         &[Align::Right, Align::Left, Align::Right],
         &data,
     );
-    page_shell(&table)
+    // Escape the whole table first so all user-supplied text is HTML-safe,
+    // then turn each (still unique) username into a link to its profile.
+    let mut html = esc(&table);
+    for (i, l) in rows.iter().enumerate() {
+        let escaped = esc(&displays[i]);
+        let link = format!(
+            r#"<a href="/u/{}">{}</a>"#,
+            url_path_encode(&l.username),
+            escaped,
+        );
+        // Replace exactly once: usernames are unique on the leaderboard.
+        html = html.replacen(&escaped, &link, 1);
+    }
+    page_shell(&html)
 }
 
 fn render_error(msg: &str) -> String {
-    page_shell(&format!("  standings temporarily unavailable\n  {msg}"))
+    page_shell(&esc(&format!("  standings temporarily unavailable\n  {msg}")))
+}
+
+// ---------------------------------------------------------------------------
+// Per-user profile page  (/u/:username)
+// ---------------------------------------------------------------------------
+
+async fn profile(Path(username): Path<String>, State(st): State<AppState>) -> Html<String> {
+    let detail = match fetch_user_detail(&st, &username).await {
+        Ok(d) => d,
+        Err(e) => return Html(render_profile_error(&username, &e.to_string())),
+    };
+    // The sim doesn't include rank in /admin/user; reuse the leaderboard call.
+    let rank = fetch_leaders(&st)
+        .await
+        .ok()
+        .and_then(|ls| ls.iter().position(|l| l.username == detail.username).map(|i| i + 1));
+    Html(render_profile_page(&detail, rank))
+}
+
+async fn fetch_user_detail(st: &AppState, username: &str) -> Result<UserDetail> {
+    let url = format!("{}/admin/user/{}", st.poly_url, url_path_encode(username));
+    st.client
+        .get(&url)
+        .header("X-Admin-Secret", &st.admin_secret)
+        .send()
+        .await
+        .context("calling polymarket /admin/user")?
+        .error_for_status()
+        .context("polymarket /admin/user rejected (unknown member?)")?
+        .json::<UserDetail>()
+        .await
+        .context("parsing /admin/user response")
+}
+
+/// Trim a 26-char ISO datetime down to `YYYY-MM-DD HH:MM` for the trades table.
+fn fmt_time_short(s: &str) -> String {
+    let head: String = s.chars().take(16).collect();
+    head.replace('T', " ")
+}
+
+/// Trim an ISO timestamp to just the date for the chart's x-axis labels.
+fn fmt_date(s: &str) -> String {
+    s.chars().take(10).collect()
+}
+
+/// Pure-SVG monochrome line chart of net worth over time. Renders inline (no
+/// JS, no external assets). Returns a friendly placeholder when there aren't
+/// enough points yet to draw a line.
+fn svg_chart(history: &[HistoryPoint]) -> String {
+    if history.len() < 2 {
+        return r#"<div class="chart-empty dim">collecting net-worth points — your line will appear here after a couple of snapshots (recorded on every fill and every 5 min)</div>"#.to_string();
+    }
+
+    let n = history.len();
+    let ys: Vec<f64> = history.iter().map(|p| p.net_worth).collect();
+    let mut ymin = ys.iter().cloned().fold(f64::INFINITY, f64::min);
+    let mut ymax = ys.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
+    if (ymax - ymin).abs() < 1e-9 {
+        // Flat line — synthesize a small range so the polyline is visible.
+        ymin -= 1.0;
+        ymax += 1.0;
+    }
+    let pad_y = (ymax - ymin) * 0.08;
+    ymin -= pad_y;
+    ymax += pad_y;
+
+    let (w, h) = (680.0_f64, 220.0_f64);
+    let (pl, pr, pt, pb) = (78.0_f64, 12.0_f64, 14.0_f64, 28.0_f64);
+    let plot_w = w - pl - pr;
+    let plot_h = h - pt - pb;
+    let xp = |i: usize| pl + (i as f64) / ((n as f64) - 1.0) * plot_w;
+    let yp = |v: f64| pt + (1.0 - (v - ymin) / (ymax - ymin)) * plot_h;
+
+    let points: String = (0..n)
+        .map(|i| format!("{:.1},{:.1}", xp(i), yp(ys[i])))
+        .collect::<Vec<_>>()
+        .join(" ");
+
+    let ymid = (ymin + ymax) / 2.0;
+    let labels = format!(
+        r##"<text x="{lx}" y="{y1}" text-anchor="end" font-size="10" fill="#888">{lmax}</text>
+<text x="{lx}" y="{y2}" text-anchor="end" font-size="10" fill="#888">{lmid}</text>
+<text x="{lx}" y="{y3}" text-anchor="end" font-size="10" fill="#888">{lmin}</text>"##,
+        lx = pl - 6.0,
+        y1 = pt + 4.0,
+        y2 = pt + plot_h / 2.0 + 4.0,
+        y3 = pt + plot_h + 4.0,
+        lmax = esc(&fmt_money(ymax)),
+        lmid = esc(&fmt_money(ymid)),
+        lmin = esc(&fmt_money(ymin)),
+    );
+
+    let bottom = format!(
+        r##"<text x="{xs}" y="{yb}" text-anchor="start" font-size="10" fill="#888">{ls}</text>
+<text x="{xe}" y="{yb}" text-anchor="end" font-size="10" fill="#888">{le}</text>"##,
+        xs = pl,
+        xe = pl + plot_w,
+        yb = pt + plot_h + 20.0,
+        ls = esc(&fmt_date(&history.first().unwrap().at)),
+        le = esc(&fmt_date(&history.last().unwrap().at)),
+    );
+
+    let axes = format!(
+        r##"<line x1="{pl}" y1="{pt}" x2="{pl}" y2="{ay}" stroke="#333" stroke-width="1"/>
+<line x1="{pl}" y1="{ay}" x2="{ax}" y2="{ay}" stroke="#333" stroke-width="1"/>"##,
+        pl = pl,
+        pt = pt,
+        ay = pt + plot_h,
+        ax = pl + plot_w,
+    );
+
+    format!(
+        r##"<svg class="chart" viewBox="0 0 {w} {h}" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Net worth over time">
+{axes}
+<polyline fill="none" stroke="#f0f0f0" stroke-width="1.5" points="{pts}"/>
+{labels}
+{bottom}
+</svg>"##,
+        w = w,
+        h = h,
+        axes = axes,
+        pts = points,
+        labels = labels,
+        bottom = bottom,
+    )
+}
+
+/// Render the small key/value summary block at the top of the profile page.
+fn render_summary_block(d: &UserDetail, rank: Option<usize>) -> String {
+    let role_suffix = if d.role.is_empty() || d.role == "member" {
+        String::new()
+    } else {
+        format!(" · {}", d.role)
+    };
+    let header = format!(
+        "<span class=\"dim\">$</span> predlab member · {}{}",
+        esc(&d.username),
+        esc(&role_suffix),
+    );
+    let rank_str = rank
+        .map(|r| format!("#{r}"))
+        .unwrap_or_else(|| "—".to_string());
+    let kv = format!(
+        "  {:<10}{}\n  {:<10}{}\n  {:<10}{}\n  {:<10}{}\n  {:<10}{}",
+        "rank",
+        rank_str,
+        "cash",
+        fmt_money(d.cash),
+        "position",
+        fmt_money(d.positions_value),
+        "orders",
+        fmt_money(d.open_orders_value),
+        "net worth",
+        fmt_money(d.net_worth),
+    );
+    format!("{header}\n\n{kv}", header = header, kv = esc(&kv))
+}
+
+fn render_positions_block(positions: &[DetailPosition]) -> String {
+    let title = "<span class=\"dim\"># positions</span>";
+    if positions.is_empty() {
+        return format!("{title}\n\n  <span class=\"dim\">(no open positions)</span>");
+    }
+    let rows: Vec<Vec<String>> = positions
+        .iter()
+        .map(|p| {
+            vec![
+                truncate(&p.market_id, 8),
+                truncate(p.market_question.as_deref().unwrap_or(""), 40),
+                format!("{:.4}", p.size),
+                p.avg_entry_price
+                    .map(|v| format!("{v:.4}"))
+                    .unwrap_or_else(|| "—".to_string()),
+                format!("{:.4}", p.current_price),
+                fmt_money(p.unrealized_pnl),
+            ]
+        })
+        .collect();
+    let table = build_table(
+        &["MARKET", "QUESTION", "SIZE", "ENTRY", "MARK", "UNREALIZED"],
+        &[
+            Align::Left,
+            Align::Left,
+            Align::Right,
+            Align::Right,
+            Align::Right,
+            Align::Right,
+        ],
+        &rows,
+    );
+    format!("{title}\n\n{}", esc(&table))
+}
+
+fn render_trades_block(trades: &[DetailTrade]) -> String {
+    let title = "<span class=\"dim\"># recent trades</span>";
+    if trades.is_empty() {
+        return format!("{title}\n\n  <span class=\"dim\">(no trades yet)</span>");
+    }
+    let rows: Vec<Vec<String>> = trades
+        .iter()
+        .map(|t| {
+            vec![
+                fmt_time_short(&t.created_at),
+                truncate(&t.market_id, 8),
+                t.side.to_uppercase(),
+                format!("{:.4}", t.size),
+                format!("{:.4}", t.price),
+            ]
+        })
+        .collect();
+    let table = build_table(
+        &["TIME", "MARKET", "SIDE", "SIZE", "PRICE"],
+        &[
+            Align::Left,
+            Align::Left,
+            Align::Left,
+            Align::Right,
+            Align::Right,
+        ],
+        &rows,
+    );
+    format!("{title}\n\n{}", esc(&table))
+}
+
+fn render_profile_page(d: &UserDetail, rank: Option<usize>) -> String {
+    let summary = render_summary_block(d, rank);
+    let chart = svg_chart(&d.history);
+    let positions = render_positions_block(&d.positions);
+    let trades = render_trades_block(&d.trades);
+
+    let body = format!(
+        "<pre class=\"board\">{summary}</pre>\n\
+         {chart}\n\
+         <pre class=\"board\">{positions}</pre>\n\
+         <pre class=\"board\">{trades}</pre>\n\
+         <p class=\"nav\"><a href=\"/\">← back to leaderboard</a></p>",
+        summary = summary,
+        chart = chart,
+        positions = positions,
+        trades = trades,
+    );
+    document(
+        &format!("predlab · {}", d.username),
+        None,
+        &body,
+    )
+}
+
+fn render_profile_error(username: &str, msg: &str) -> String {
+    let title = format!(
+        "<span class=\"dim\">$</span> predlab member · {}",
+        esc(username),
+    );
+    let body_pre = format!(
+        "{title}\n\n  {}\n  <span class=\"dim\">{}</span>",
+        esc("profile unavailable"),
+        esc(msg),
+    );
+    let body = format!(
+        "<pre class=\"board\">{body_pre}</pre>\n\
+         <p class=\"nav\"><a href=\"/\">← back to leaderboard</a></p>",
+        body_pre = body_pre,
+    );
+    document(
+        &format!("predlab · {}", username),
+        None,
+        &body,
+    )
 }
 
 #[cfg(test)]
@@ -460,5 +820,130 @@ mod tests {
         let html = render_page(&[leader("<script>", 0.0)]);
         assert!(!html.contains("<script>"));
         assert!(html.contains("&lt;script&gt;"));
+    }
+
+    // --- profile page --------------------------------------------------
+
+    #[test]
+    fn leaderboard_username_is_a_link_to_profile() {
+        let html = render_page(&[leader("teddy", 29444.44)]);
+        assert!(html.contains(r#"<a href="/u/teddy">teddy</a>"#));
+    }
+
+    #[test]
+    fn url_path_encode_preserves_safe_chars_and_encodes_unsafe() {
+        assert_eq!(url_path_encode("teddy_42.bot-1"), "teddy_42.bot-1");
+        assert_eq!(url_path_encode("a/b c"), "a%2Fb%20c");
+        assert_eq!(url_path_encode("<script>"), "%3Cscript%3E");
+    }
+
+    #[test]
+    fn fmt_time_short_drops_seconds_and_tz() {
+        assert_eq!(fmt_time_short("2026-05-22T16:39:27.340254"), "2026-05-22 16:39");
+        assert_eq!(fmt_time_short("2026-01-01T00:00:00"), "2026-01-01 00:00");
+    }
+
+    fn detail(history: Vec<HistoryPoint>) -> UserDetail {
+        UserDetail {
+            username: "teddy".into(),
+            role: "member".into(),
+            cash: 15000.0,
+            positions_value: 14444.44,
+            open_orders_value: 0.0,
+            net_worth: 29444.44,
+            positions: vec![DetailPosition {
+                market_id: "631144".into(),
+                market_question: Some("Will it rain?".into()),
+                size: 2_222_222.0,
+                avg_entry_price: Some(0.0045),
+                current_price: 0.0065,
+                unrealized_pnl: 4444.44,
+            }],
+            trades: vec![DetailTrade {
+                market_id: "631144".into(),
+                side: "buy".into(),
+                price: 0.0045,
+                size: 2_222_222.0,
+                created_at: "2026-05-22T16:39:27".into(),
+            }],
+            history,
+        }
+    }
+
+    fn pt(at: &str, nw: f64) -> HistoryPoint {
+        HistoryPoint { at: at.into(), net_worth: nw }
+    }
+
+    #[test]
+    fn svg_chart_renders_polyline_when_enough_points() {
+        let svg = svg_chart(&[
+            pt("2026-05-22T00:00:00", 25_000.0),
+            pt("2026-05-23T00:00:00", 26_500.0),
+            pt("2026-05-24T00:00:00", 29_444.44),
+        ]);
+        assert!(svg.contains("<svg") && svg.contains("</svg>"));
+        assert!(svg.contains("<polyline"));
+        // y-axis labels show money-formatted ticks (padded so the exact value
+        // depends on the chart's headroom; just check the formatter ran).
+        assert!(svg.matches("$").count() >= 3);
+        // x-axis labels show the start/end dates.
+        assert!(svg.contains("2026-05-22") && svg.contains("2026-05-24"));
+    }
+
+    #[test]
+    fn svg_chart_falls_back_when_sparse() {
+        assert!(svg_chart(&[]).contains("collecting"));
+        assert!(svg_chart(&[pt("2026-05-22T00:00:00", 25_000.0)]).contains("collecting"));
+    }
+
+    #[test]
+    fn svg_chart_handles_flat_history_without_panic() {
+        let svg = svg_chart(&[
+            pt("2026-05-22T00:00:00", 25_000.0),
+            pt("2026-05-23T00:00:00", 25_000.0),
+        ]);
+        assert!(svg.contains("<polyline"));
+    }
+
+    #[test]
+    fn profile_page_has_summary_chart_positions_trades_and_back_link() {
+        let html = render_profile_page(
+            &detail(vec![
+                pt("2026-05-22T00:00:00", 25_000.0),
+                pt("2026-05-24T00:00:00", 29_444.44),
+            ]),
+            Some(1),
+        );
+        assert!(html.contains("predlab member · teddy"));
+        assert!(html.contains("#1"));
+        assert!(html.contains("$29,444.44"));
+        assert!(html.contains("<svg") && html.contains("</svg>"));
+        assert!(html.contains("POSITIONS") || html.contains("# positions"));
+        assert!(html.contains("UNREALIZED"));
+        assert!(html.contains("$4,444.44")); // unrealized P&L
+        assert!(html.contains("# recent trades"));
+        assert!(html.contains("BUY"));
+        assert!(html.contains(r#"href="/""#)); // back to leaderboard
+        // No auto-refresh on the profile page.
+        assert!(!html.contains("http-equiv=\"refresh\""));
+    }
+
+    #[test]
+    fn profile_handles_empty_positions_and_trades() {
+        let mut d = detail(vec![]);
+        d.positions.clear();
+        d.trades.clear();
+        let html = render_profile_page(&d, None);
+        assert!(html.contains("no open positions"));
+        assert!(html.contains("no trades yet"));
+        assert!(html.contains("collecting net-worth points"));
+    }
+
+    #[test]
+    fn profile_error_page_includes_username_and_back_link() {
+        let html = render_profile_error("teddy", "boom");
+        assert!(html.contains("predlab member · teddy"));
+        assert!(html.contains("boom"));
+        assert!(html.contains(r#"href="/""#));
     }
 }

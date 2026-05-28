@@ -25,7 +25,7 @@ from typing import Any
 from sqlalchemy import delete, select, update
 from sqlalchemy.orm import Session
 
-from ..models.db import Market, Order, PaperAccount, Position, Trade, User
+from ..models.db import Market, NetWorthSnapshot, Order, PaperAccount, Position, Trade, User
 from .auth import ensure_paper_account
 from .orderbook import OrderBookEntry, get_orderbook, remove_user_orders, reset_orderbook
 
@@ -310,6 +310,10 @@ def place_paper_order(
     # On a partial fill the filled portion was reconciled above; the escrow for the
     # remaining (resting) size stays reserved and is refunded when it cancels.
 
+    # A fill moves the taker's net worth — drop a point on their curve.
+    if total_filled_now > 0:
+        record_snapshot(db, user)
+
     db.commit()
     db.refresh(order)
     logger.info(
@@ -398,6 +402,9 @@ def _settle_resting_counterparty(
     filled = float(maker_order.filled_size or 0.0) + f_size
     maker_order.filled_size = min(float(maker_order.size), filled)
     maker_order.status = "filled" if filled >= float(maker_order.size) - 1e-9 else "partial"
+
+    # The maker's net worth moved too — record their point on the same fill.
+    record_snapshot(db, maker_user)
 
 
 # ---------------------------------------------------------------------------
@@ -525,6 +532,103 @@ def leaderboard(db: Session) -> list[dict[str, Any]]:
 
 
 # ---------------------------------------------------------------------------
+# Net-worth history (for the per-user profile graph)
+# ---------------------------------------------------------------------------
+
+
+def record_snapshot(db: Session, user: User) -> NetWorthSnapshot:
+    """Append one point to a user's net-worth-over-time curve.
+
+    Cheap row; flushed (not committed) so callers control the transaction.
+    The pre-flush ensures pending mutations in the same transaction (a reset,
+    a fill, a cancel) are visible to ``compute_net_worth``'s SELECTs — the
+    session uses ``autoflush=False`` so we must do it ourselves.
+    """
+    db.flush()
+    nw = compute_net_worth(db, user)
+    snap = NetWorthSnapshot(
+        user_id=user.id,
+        net_worth=nw["net_worth"],
+        cash=nw["cash"],
+        positions_value=nw["positions_value"],
+    )
+    db.add(snap)
+    db.flush()
+    return snap
+
+
+def record_all_snapshots(db: Session) -> int:
+    """Snapshot every user's net worth (periodic tick / settlement). Commits."""
+    users = db.execute(select(User)).scalars().all()
+    for u in users:
+        record_snapshot(db, u)
+    db.commit()
+    return len(users)
+
+
+def get_user_detail(
+    db: Session, username: str, *, trade_limit: int = 100, snapshot_limit: int = 1000
+) -> dict[str, Any] | None:
+    """Everything the profile page needs: net worth, positions, trades, history.
+
+    Returns ``None`` when the username does not exist.
+    """
+    user = db.execute(select(User).where(User.username == username)).scalar_one_or_none()
+    if not user:
+        return None
+
+    trades = (
+        db.execute(
+            select(Trade)
+            .where(Trade.user_id == user.id)
+            .order_by(Trade.created_at.desc())
+            .limit(trade_limit)
+        )
+        .scalars()
+        .all()
+    )
+    snapshots = (
+        db.execute(
+            select(NetWorthSnapshot)
+            .where(NetWorthSnapshot.user_id == user.id)
+            .order_by(NetWorthSnapshot.created_at.asc())
+            .limit(snapshot_limit)
+        )
+        .scalars()
+        .all()
+    )
+
+    return {
+        "username": user.username,
+        "display_name": user.display_name,
+        "role": user.role,
+        **compute_net_worth(db, user),
+        "positions": list_user_positions_with_pnl(db, user),
+        "trades": [
+            {
+                "id": t.id,
+                "market_id": t.market_id,
+                "clob_token_id": t.clob_token_id,
+                "side": t.side,
+                "price": float(t.price),
+                "size": float(t.size),
+                "created_at": t.created_at.isoformat(),
+            }
+            for t in trades
+        ],
+        "history": [
+            {
+                "t": s.created_at.isoformat(),
+                "net_worth": float(s.net_worth),
+                "cash": float(s.cash),
+                "positions_value": float(s.positions_value),
+            }
+            for s in snapshots
+        ],
+    }
+
+
+# ---------------------------------------------------------------------------
 # Admin: balance resets & member removal (teaching ops)
 # ---------------------------------------------------------------------------
 
@@ -551,6 +655,7 @@ def reset_user_to_starting(db: Session, user: User, starting_balance: float) -> 
 
     acct = ensure_paper_account(db, user)
     acct.balance_usd = starting_balance  # type: ignore[assignment]
+    record_snapshot(db, user)
     db.commit()
     return {
         "reset": user.username,
@@ -571,6 +676,8 @@ def reset_all_to_starting(db: Session, starting_balance: float) -> dict[str, Any
     db.execute(delete(Position))
     for u in users:
         ensure_paper_account(db, u).balance_usd = starting_balance  # type: ignore[assignment]
+    for u in users:
+        record_snapshot(db, u)
     db.commit()
     reset_orderbook()  # clear every in-memory book at once
     return {"reset": "all", "count": len(users), "balance": starting_balance}
@@ -641,6 +748,10 @@ def force_resolve_market(db: Session, market_id: str, resolution: str = "yes") -
     # Mark market closed
     market.closed = True
     market.active = False
+
+    # Settlement shifts winners' and losers' net worth — snapshot everyone.
+    for u in db.execute(select(User)).scalars().all():
+        record_snapshot(db, u)
     db.commit()
 
     logger.info(
