@@ -61,10 +61,22 @@ def _mid_from_market(m: Market) -> float:
 
 
 def _current_price_for_token(db: Session, token_id: str) -> float:
+    """Per-share mark for one specific outcome token.
+
+    ``Market.best_bid``/``best_ask`` are synced from Gamma's ``bestBid``/``bestAsk``,
+    which describe the *first* (Yes) leg only. A binary market has two tokens
+    whose prices sum to 1, so a position on the second (No) leg must be valued
+    at ``1 - yes_mid`` — otherwise No-leg holdings are silently marked at the
+    dominant Yes-leg price and reported P&L is inverted.
+    """
     m = _get_market_by_token(db, token_id)
-    if m:
-        return _mid_from_market(m)
-    return 0.5
+    if not m:
+        return 0.5
+    yes_mid = _mid_from_market(m)
+    tokens = m.clob_token_ids or []
+    if len(tokens) >= 2 and token_id == tokens[1]:
+        return 1.0 - yes_mid
+    return yes_mid
 
 
 # ---------------------------------------------------------------------------

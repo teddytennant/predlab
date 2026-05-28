@@ -6,6 +6,7 @@ import pytest
 
 from polymarket_sim.services.auth import create_demo_user_with_key, ensure_paper_account
 from polymarket_sim.services.paper_trading import (
+    _current_price_for_token,
     cancel_paper_order,
     compute_net_worth,
     force_resolve_market,
@@ -221,6 +222,37 @@ def test_reset_records_a_snapshot_so_graph_drops_to_starting(session, market, st
 
 def test_get_user_detail_returns_none_for_unknown_user(session):
     assert get_user_detail(session, "no-such-member") is None
+
+
+def test_no_leg_token_is_valued_at_one_minus_yes_mid(session, make_market):
+    """Holding the second (No) outcome token must mark at 1 - the Yes-leg mid.
+
+    Gamma's bestBid/bestAsk describe the Yes leg, so a No-leg holding was
+    previously silently valued at the dominant Yes-leg price — making lossy
+    No-leg positions read as huge winners.
+    """
+    # Yes mid = 0.81 means No should mark at 0.19.
+    mkt = make_market(
+        session, market_id="legs", token_yes="YES_TOK", token_no="NO_TOK",
+        best_bid=0.80, best_ask=0.82,
+    )
+    assert _current_price_for_token(session, mkt.clob_token_ids[0]) == pytest.approx(0.81)
+    assert _current_price_for_token(session, mkt.clob_token_ids[1]) == pytest.approx(0.19)
+
+
+def test_net_worth_uses_correct_leg_for_no_position(session, make_market, starting_balance):
+    """End-to-end: a position on the No leg must price its leg, not the Yes leg."""
+    mkt = make_market(
+        session, market_id="legs2", token_yes="Y", token_no="N",
+        best_bid=0.70, best_ask=0.72,
+    )
+    alice = _user(session, "alice")
+    # Update the position directly to hold 100 of the No token at entry 0.30.
+    update_position_on_fill(session, alice, mkt, "N", 100, 0.30, "buy")
+    session.commit()
+    nw = compute_net_worth(session, alice)
+    # No leg mark = 1 - 0.71 = 0.29 -> 100 * 0.29 = 29.0 (not 100 * 0.71 = 71.0)
+    assert nw["positions_value"] == pytest.approx(29.0)
 
 
 def test_force_resolve_yes_pays_winning_holders_one_dollar_per_share(session, market):
