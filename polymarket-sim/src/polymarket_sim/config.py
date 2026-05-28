@@ -24,7 +24,9 @@ class Settings(BaseSettings):
     # Data sync from real Polymarket Gamma API.
     gamma_api_base: str = "https://gamma-api.polymarket.com"
     # How often the background loop re-syncs the live catalog (seconds).
-    sync_interval_seconds: int = 300
+    # Tighter than the original 300s so member net worth and the profile
+    # charts react more quickly when upstream prices actually move.
+    sync_interval_seconds: int = 60
     # Only carry markets at/above this 24h-ish dollar volume. Gamma is sorted
     # volume-descending, so we stop paging once we drop below this.
     sync_min_volume: float = 1000.0
