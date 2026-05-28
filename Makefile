@@ -1,4 +1,4 @@
-.PHONY: help up down logs clean test test-sims test-admin lint admin install-admin
+.PHONY: help up down logs clean test test-sims test-admin test-tui test-leaderboard lint admin install-admin tui install-tui
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-15s\033[0m %s\n", $$1, $$2}'
@@ -18,7 +18,13 @@ admin: ## Run the Rust admin TUI (against running sims)
 install-admin: ## Install the `predlab` admin binary onto your PATH
 	cd ratatui-admin && cargo install --path .
 
-test: test-sims test-admin ## Run every test suite (sim + admin)
+tui: ## Run the member TUI (against the configured POLY_BASE)
+	cd predlab-tui && cargo run --release
+
+install-tui: ## Install the `predlab-tui` member binary onto your PATH
+	cd predlab-tui && cargo install --path .
+
+test: test-sims test-admin test-tui test-leaderboard ## Run every test suite
 
 test-sims: ## Run the Python simulator test suite
 	cd polymarket-sim && python -m pytest -q
@@ -26,9 +32,17 @@ test-sims: ## Run the Python simulator test suite
 test-admin: ## Run the Rust admin test suite
 	cd ratatui-admin && cargo test
 
+test-tui: ## Run the member TUI test suite
+	cd predlab-tui && cargo test
+
+test-leaderboard: ## Run the leaderboard web-server test suite
+	cd leaderboard-rs && cargo test
+
 lint: ## Run linters across the repo
 	cd polymarket-sim && ruff check src/ tests/
 	cd ratatui-admin && cargo clippy --quiet
+	cd predlab-tui && cargo clippy --quiet
+	cd leaderboard-rs && cargo clippy --quiet
 
 clean: ## Remove containers, volumes, and caches
 	docker compose down -v
@@ -36,3 +50,5 @@ clean: ## Remove containers, volumes, and caches
 	find . -type d -name ".pytest_cache" -exec rm -rf {} + 2>/dev/null || true
 	find . -type d -name ".ruff_cache" -exec rm -rf {} + 2>/dev/null || true
 	cd ratatui-admin && cargo clean 2>/dev/null || true
+	cd predlab-tui && cargo clean 2>/dev/null || true
+	cd leaderboard-rs && cargo clean 2>/dev/null || true

@@ -32,6 +32,8 @@ pip install requests
 
 (No Python? Skip to the [curl section](#prefer-curl-or-another-language) — any HTTP tool works.)
 
+> **Prefer a terminal?** [`predlab-tui`](predlab-tui/) is a vim-flavored TUI clone of the leaderboard site: standings, markets, and your portfolio in one window. Install with `cargo install --git https://github.com/teddytennant/predlab predlab-tui`, then `export POLY_API_KEY=…` and run `predlab-tui`. The install page (with screenshots and key reference) is also linked from [predlab.teddytennant.com/tui](https://predlab.teddytennant.com/tui).
+
 ### Step 2 — Plug in your key
 
 In a Python shell or script **in the same folder** as `predlab.py`:
@@ -138,6 +140,7 @@ predlab/
 ├── polymarket-sim/   # Polymarket-style Gamma + CLOB mock (Python / FastAPI)  :8001
 ├── leaderboard-rs/   # Public live leaderboard page (Rust / axum)             :8003
 ├── ratatui-admin/    # Admin TUI (Rust): issue keys + manage club roster
+├── predlab-tui/      # Member TUI (Rust): vim leaderboard + markets + portfolio
 ├── examples/         # Member starter client (predlab.py)
 ├── docker-compose.yml
 └── Makefile

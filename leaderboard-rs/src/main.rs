@@ -21,11 +21,11 @@ use anyhow::{Context, Result};
 use axum::{
     extract::{Path, State},
     http::header,
-    response::{Html, IntoResponse},
+    response::{Html, IntoResponse, Json},
     routing::get,
     Router,
 };
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 /// How long a rendered page is reused before we re-fetch the sim.
 const CACHE_TTL: Duration = Duration::from_secs(15);
@@ -36,8 +36,17 @@ const REFRESH_SECS: u32 = 30;
 /// build.rs) and served as a download at `/predlab.py`.
 const CLIENT_PY: &str = include_str!(concat!(env!("OUT_DIR"), "/predlab_client.py"));
 
-#[derive(Clone, Default)]
+#[derive(Clone, Default, Serialize)]
 struct Leader {
+    username: String,
+    net_worth: f64,
+}
+
+/// One row of `/leaderboard.json` — what the TUI consumes. Identical to
+/// `Leader` plus a `rank` index so clients don't have to re-derive it.
+#[derive(Serialize)]
+struct LeaderJson {
+    rank: usize,
     username: String,
     net_worth: f64,
 }
@@ -131,8 +140,10 @@ async fn main() -> Result<()> {
     let app = Router::new()
         .route("/", get(index))
         .route("/start", get(start))
+        .route("/tui", get(tui_page))
         .route("/u/:username", get(profile))
         .route("/predlab.py", get(client_py))
+        .route("/leaderboard.json", get(leaderboard_json))
         .route("/healthz", get(|| async { "ok" }))
         .with_state(state);
 
@@ -181,6 +192,28 @@ async fn client_py() -> impl IntoResponse {
         ],
         CLIENT_PY,
     )
+}
+
+/// Public JSON ranking — same data the HTML page shows. Consumed by the
+/// terminal client (`predlab-tui`). No PII beyond the usernames already on
+/// the public board, so no auth required.
+async fn leaderboard_json(State(st): State<AppState>) -> impl IntoResponse {
+    let leaders = fetch_leaders(&st).await.unwrap_or_default();
+    let rows: Vec<LeaderJson> = leaders
+        .into_iter()
+        .enumerate()
+        .map(|(i, l)| LeaderJson {
+            rank: i + 1,
+            username: l.username,
+            net_worth: l.net_worth,
+        })
+        .collect();
+    Json(rows)
+}
+
+/// Onboarding page for the terminal client: install / run / vim keys.
+async fn tui_page() -> Html<String> {
+    Html(render_tui_page())
 }
 
 /// Fetch the sim's per-user net worth, dropping excluded (staff/seed) usernames.
@@ -393,8 +426,48 @@ yes_token = poly.markets(limit=1)[0]["clobTokenIds"][0]
 poly.place_order(token_id=yes_token, side="BUY", price=0.55, size=10)
 print(poly.positions())                          # what you now hold</pre>
 <p class="dim">paper trading only · full step-by-step guide → <a href="https://github.com/teddytennant/predlab#getting-started-members">github.com/teddytennant/predlab</a></p>
+<p class="dim">prefer a terminal? <a href="/tui">→ install the TUI client (predlab-tui)</a></p>
 </section>
 <p class="nav"><a href="/">← back to leaderboard</a></p>"##;
+
+/// Standalone install page for the terminal client. Mirrors the look of
+/// `/start` so members feel like they're still on the same site.
+const TUI_ONBOARD: &str = r##"<section class="onboard">
+<h2><span class="dim">$</span> predlab-tui — paper trading in your shell</h2>
+<p>A vim-flavored TUI clone of this site: leaderboard, markets, and your portfolio in one window. Same data, no browser.</p>
+
+<h2 style="margin-top:18px"><span class="dim">$</span> install (one line)</h2>
+<pre class="snippet">cargo install --git https://github.com/teddytennant/predlab predlab-tui</pre>
+<p class="dim">requires Rust (<a href="https://rustup.rs">rustup.rs</a>). drops the <code>predlab-tui</code> binary onto your PATH.</p>
+
+<h2 style="margin-top:18px"><span class="dim">$</span> run it</h2>
+<pre class="snippet">export POLY_API_KEY=pm_paper_…   # your key (admin issues it)
+predlab-tui</pre>
+<p class="dim">no key? the Leaderboard and Markets tabs still work. ask an admin for one to unlock Portfolio.</p>
+
+<h2 style="margin-top:18px"><span class="dim">$</span> keys (vim)</h2>
+<pre class="snippet">h l   1 2 3 4   switch tab
+j k   gg / G    move selection / jump
+r R             refresh tab / refresh all
+/needle         filter the current list
+:cmd            ex command — try :help, :q
+?               full help screen
+q   Ctrl-c      quit</pre>
+
+<p class="dim">screens:</p>
+<pre class="snippet"><span class="dim">┌─ PREDLAB v0.1.0  ·  paper trading ────────────  ● connected ─┐</span>
+<span class="dim"> </span> 1 <strong>LEADERBOARD</strong>   2 MARKETS    3 PORTFOLIO   4 HELP
+<span class="dim">┌─ LEADERBOARD ────────────────────── 42 members · 12s ago ─┐</span>
+<span class="dim">│</span>  #   MEMBER                        NET WORTH
+<span class="dim">│</span>  ▶ 1 teddy                         $29,444.44 ★
+<span class="dim">│</span>    2 alice                         $26,300.00
+<span class="dim">│</span>    3 bob                           $25,420.10
+<span class="dim">└────────────────────────────────────────────────────────────┘</span>
+<span class="dim"> NORMAL </span> /ali                                ? help  : cmd  q quit</pre>
+
+<p class="dim">runs anywhere with Rust + a 256-color terminal · paper money only</p>
+</section>
+<p class="nav"><a href="/">← back to leaderboard</a>  ·  <a href="/start">→ python client</a></p>"##;
 
 /// Full HTML document with the shared terminal styling. `refresh` adds a
 /// meta-refresh (the auto-updating leaderboard uses it; the start page omits it).
@@ -435,7 +508,8 @@ fn page_shell(board_inner: &str) -> String {
     );
     let body = format!(
         "<pre class=\"board\">{board}</pre>\n\
-         <p class=\"nav\">new here? <a href=\"/start\">→ get your key &amp; start trading</a></p>",
+         <p class=\"nav\">new here? <a href=\"/start\">→ get your key &amp; start trading</a> · \
+         <a href=\"/tui\">→ install the terminal client</a></p>",
         board = board,
     );
     document("predlab · leaderboard", Some(REFRESH_SECS), &body)
@@ -444,6 +518,11 @@ fn page_shell(board_inner: &str) -> String {
 /// The standalone onboarding / download page.
 fn render_start_page() -> String {
     document("predlab · get started", None, ONBOARD)
+}
+
+/// Standalone install page for the terminal client.
+fn render_tui_page() -> String {
+    document("predlab · TUI client", None, TUI_ONBOARD)
 }
 
 fn render_page(rows: &[Leader]) -> String {
@@ -789,9 +868,10 @@ mod tests {
     }
 
     #[test]
-    fn leaderboard_links_to_start_page() {
+    fn leaderboard_links_to_start_and_tui_pages() {
         let html = render_page(&[leader("alice", 25000.0)]);
         assert!(html.contains(r#"href="/start""#));
+        assert!(html.contains(r#"href="/tui""#));
         // onboarding itself is NOT on the board page anymore
         assert!(!html.contains("pip install requests"));
     }
@@ -945,5 +1025,40 @@ mod tests {
         assert!(html.contains("predlab member · teddy"));
         assert!(html.contains("boom"));
         assert!(html.contains(r#"href="/""#));
+    }
+
+    // --- TUI install page ---------------------------------------------
+
+    #[test]
+    fn tui_page_has_install_run_and_keys_sections() {
+        let html = render_tui_page();
+        // install command for the terminal client
+        assert!(html.contains("cargo install --git"));
+        assert!(html.contains("predlab-tui"));
+        // run instructions reference the env var
+        assert!(html.contains("POLY_API_KEY"));
+        // vim keys are documented
+        assert!(html.contains("gg") && html.contains(": cmd"));
+        // back-to-leaderboard nav
+        assert!(html.contains(r#"href="/""#));
+        // and a cross-link to the python client onboarding
+        assert!(html.contains(r#"href="/start""#));
+        // no auto-refresh on a static page
+        assert!(!html.contains("http-equiv=\"refresh\""));
+    }
+
+    #[test]
+    fn start_page_links_to_tui_install() {
+        let html = render_start_page();
+        assert!(html.contains(r#"href="/tui""#));
+    }
+
+    #[test]
+    fn leader_json_struct_serializes_with_rank() {
+        let l = LeaderJson { rank: 1, username: "teddy".into(), net_worth: 29_444.44 };
+        let s = serde_json::to_string(&l).unwrap();
+        assert!(s.contains(r#""rank":1"#));
+        assert!(s.contains(r#""username":"teddy""#));
+        assert!(s.contains(r#""net_worth":29444.44"#));
     }
 }
