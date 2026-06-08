@@ -420,6 +420,9 @@ async fn fetch_leaderboard() -> Result<Vec<Leader>> {
         b.net_worth
             .partial_cmp(&a.net_worth)
             .unwrap_or(std::cmp::Ordering::Equal)
+            // Stable, deterministic tie-break so equal net worths don't flicker
+            // order between refreshes.
+            .then_with(|| a.username.cmp(&b.username))
     });
     Ok(leaders)
 }
@@ -511,7 +514,9 @@ async fn issue_poly(username: &str, role: &str) -> Result<String> {
         ])
         .send()
         .await
-        .context("calling polymarket admin/create-paper-key")?;
+        .context("calling polymarket admin/create-paper-key")?
+        .error_for_status()
+        .context("create-paper-key rejected (check PREDLAB_ADMIN_SECRET / role)")?;
     let json: serde_json::Value = resp.json().await.context("parsing response")?;
     json.get("api_key")
         .and_then(|v| v.as_str())

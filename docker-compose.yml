@@ -5,7 +5,6 @@ services:
       POSTGRES_USER: predlab
       POSTGRES_PASSWORD: predlab
       POSTGRES_DB: postgres
-      POSTGRES_MULTIPLE_DATABASES: polymarket
     ports:
       - "5432:5432"
     volumes:

@@ -19,9 +19,9 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 use axum::{
-    extract::{Path, State},
-    http::header,
-    response::{Html, IntoResponse, Json},
+    extract::{Path, Query, State},
+    http::{header, StatusCode},
+    response::{Html, IntoResponse, Json, Response},
     routing::get,
     Router,
 };
@@ -36,10 +36,13 @@ const REFRESH_SECS: u32 = 30;
 /// build.rs) and served as a download at `/predlab.py`.
 const CLIENT_PY: &str = include_str!(concat!(env!("OUT_DIR"), "/predlab_client.py"));
 
-#[derive(Clone, Default, Serialize)]
 struct Leader {
     username: String,
     net_worth: f64,
+    /// Free (un-escrowed) cash — used for the club-stats aggregate only.
+    cash: f64,
+    /// Mark-to-market value of open positions — used for club stats.
+    positions_value: f64,
 }
 
 /// One row of `/leaderboard.json` — what the TUI consumes. Identical to
@@ -54,7 +57,7 @@ struct LeaderJson {
 /// Shape returned by the sim's `/admin/user/{name}` endpoint — the data the
 /// per-user profile page renders (current breakdown + positions + trades +
 /// the net-worth history series for the graph).
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 struct UserDetail {
     username: String,
     #[serde(default)]
@@ -72,7 +75,7 @@ struct UserDetail {
     history: Vec<HistoryPoint>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 struct DetailPosition {
     market_id: String,
     #[serde(default)]
@@ -84,7 +87,7 @@ struct DetailPosition {
     unrealized_pnl: f64,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 struct DetailTrade {
     market_id: String,
     side: String,
@@ -93,11 +96,27 @@ struct DetailTrade {
     created_at: String,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 struct HistoryPoint {
     #[serde(rename = "t")]
     at: String,
     net_worth: f64,
+}
+
+/// One row of the sim's public `GET /markets` feed — the subset the markets
+/// browser renders. Field names are the camelCase Gamma shape.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct Market {
+    question: String,
+    #[serde(default)]
+    outcome_prices: Vec<String>,
+    #[serde(default)]
+    best_bid: Option<f64>,
+    #[serde(default)]
+    best_ask: Option<f64>,
+    #[serde(default)]
+    volume: Option<f64>,
 }
 
 struct Cache {
@@ -110,6 +129,9 @@ struct AppState {
     poly_url: String,
     admin_secret: String,
     exclude: HashSet<String>,
+    /// Each member's starting paper stake — the baseline for the P&L column
+    /// and the "beating start" stat. Override with `START_BALANCE`.
+    start_balance: f64,
     client: reqwest::Client,
     cache: Arc<Mutex<Cache>>,
 }
@@ -128,6 +150,7 @@ impl AppState {
                 .to_string(),
             admin_secret: env("PREDLAB_ADMIN_SECRET", ""),
             exclude,
+            start_balance: env("START_BALANCE", "25000").parse().unwrap_or(25000.0),
             client: reqwest::Client::new(),
             cache: Arc::new(Mutex::new(Cache { html: String::new(), at: None })),
         }
@@ -137,11 +160,20 @@ impl AppState {
 #[tokio::main]
 async fn main() -> Result<()> {
     let state = AppState::from_env();
+    if state.admin_secret.is_empty() {
+        eprintln!(
+            "warning: PREDLAB_ADMIN_SECRET is unset — every standings fetch will be \
+             rejected by the sim and all pages will show the error placeholder."
+        );
+    }
     let app = Router::new()
         .route("/", get(index))
         .route("/start", get(start))
         .route("/tui", get(tui_page))
+        .route("/about", get(about_page))
+        .route("/markets", get(markets_page))
         .route("/u/:username", get(profile))
+        .route("/api/user/:username", get(profile_json))
         .route("/predlab.py", get(client_py))
         .route("/leaderboard.json", get(leaderboard_json))
         .route("/healthz", get(|| async { "ok" }))
@@ -167,7 +199,7 @@ async fn index(State(st): State<AppState>) -> Html<String> {
     }
 
     let html = match fetch_leaders(&st).await {
-        Ok(rows) => render_page(&rows),
+        Ok(rows) => render_page(&rows, st.start_balance),
         Err(e) => render_error(&e.to_string()),
     };
 
@@ -196,24 +228,106 @@ async fn client_py() -> impl IntoResponse {
 
 /// Public JSON ranking — same data the HTML page shows. Consumed by the
 /// terminal client (`predlab-tui`). No PII beyond the usernames already on
-/// the public board, so no auth required.
-async fn leaderboard_json(State(st): State<AppState>) -> impl IntoResponse {
-    let leaders = fetch_leaders(&st).await.unwrap_or_default();
-    let rows: Vec<LeaderJson> = leaders
-        .into_iter()
-        .enumerate()
-        .map(|(i, l)| LeaderJson {
-            rank: i + 1,
-            username: l.username,
-            net_worth: l.net_worth,
-        })
-        .collect();
-    Json(rows)
+/// the public board, so no auth required. On a sim outage we return 502 (not
+/// an empty 200) so clients can tell "no members" from "backend down".
+async fn leaderboard_json(State(st): State<AppState>) -> Response {
+    match fetch_leaders(&st).await {
+        Ok(leaders) => {
+            let rows: Vec<LeaderJson> = leaders
+                .into_iter()
+                .enumerate()
+                .map(|(i, l)| LeaderJson {
+                    rank: i + 1,
+                    username: l.username,
+                    net_worth: l.net_worth,
+                })
+                .collect();
+            Json(rows).into_response()
+        }
+        Err(e) => (
+            StatusCode::BAD_GATEWAY,
+            Json(serde_json::json!({ "error": e.to_string() })),
+        )
+            .into_response(),
+    }
 }
 
 /// Onboarding page for the terminal client: install / run / vim keys.
 async fn tui_page() -> Html<String> {
     Html(render_tui_page())
+}
+
+/// Static rules / about page — what the game is and how the score works.
+async fn about_page() -> Html<String> {
+    Html(render_about_page())
+}
+
+/// `?q=` search and `?offset=` paging for the markets browser.
+#[derive(Debug, Deserialize)]
+struct MarketQuery {
+    #[serde(default)]
+    q: Option<String>,
+    #[serde(default)]
+    offset: Option<u32>,
+}
+
+/// Markets browser — what the club can actually trade, straight from the sim's
+/// public `/markets` feed (no admin secret needed).
+async fn markets_page(State(st): State<AppState>, Query(mq): Query<MarketQuery>) -> Html<String> {
+    let q = mq.q.unwrap_or_default();
+    let offset = mq.offset.unwrap_or(0);
+    let html = match fetch_markets(&st, &q, offset).await {
+        Ok(markets) => render_markets_page(&markets, &q, offset),
+        Err(e) => document(
+            "predlab · markets",
+            None,
+            &format!(
+                "<pre class=\"board\">{}</pre>\n\
+                 <p class=\"nav\"><a href=\"/\">← back to leaderboard</a></p>",
+                esc(&format!("  markets temporarily unavailable\n  {e}")),
+            ),
+        ),
+    };
+    Html(html)
+}
+
+/// Per-member JSON twin of the `/u/:username` HTML profile — lets the TUI and
+/// member scripts read the rich profile without scraping HTML. Re-serves only
+/// what the public profile page already renders.
+async fn profile_json(Path(username): Path<String>, State(st): State<AppState>) -> Response {
+    if st.exclude.contains(&username) {
+        return (StatusCode::NOT_FOUND, Json(serde_json::json!({ "error": "no such member" })))
+            .into_response();
+    }
+    match fetch_user_detail(&st, &username).await {
+        Ok(detail) => Json(detail).into_response(),
+        Err(e) => (
+            StatusCode::BAD_GATEWAY,
+            Json(serde_json::json!({ "error": e.to_string() })),
+        )
+            .into_response(),
+    }
+}
+
+/// Fetch the club's tradable markets from the sim's public `/markets` feed.
+async fn fetch_markets(st: &AppState, q: &str, offset: u32) -> Result<Vec<Market>> {
+    let offset_s = offset.to_string();
+    let mut params: Vec<(&str, &str)> =
+        vec![("active", "true"), ("limit", "50"), ("offset", &offset_s)];
+    if !q.is_empty() {
+        params.push(("q", q));
+    }
+    st.client
+        .get(format!("{}/markets", st.poly_url))
+        .query(&params)
+        .send()
+        .await
+        .context("calling polymarket /markets")?
+        .error_for_status()
+        .context("polymarket /markets rejected")?
+        .json()
+        .await
+        .context("parsing /markets response")
 }
 
 /// Fetch the sim's per-user net worth, dropping excluded (staff/seed) usernames.
@@ -238,9 +352,12 @@ async fn fetch_leaders(st: &AppState) -> Result<Vec<Leader>> {
             if st.exclude.contains(u) {
                 return None;
             }
+            let f = |k: &str| e.get(k).and_then(|n| n.as_f64()).unwrap_or(0.0);
             Some(Leader {
                 username: u.to_string(),
-                net_worth: e.get("net_worth").and_then(|n| n.as_f64()).unwrap_or(0.0),
+                net_worth: f("net_worth"),
+                cash: f("cash"),
+                positions_value: f("positions_value"),
             })
         })
         .collect();
@@ -267,6 +384,16 @@ fn fmt_money(v: f64) -> String {
         grouped.push(*b as char);
     }
     format!("{}${}.{:02}", if neg { "-" } else { "" }, grouped, frac)
+}
+
+/// Format a profit/loss figure with an explicit leading sign, e.g. 4444.5 ->
+/// "+$4,444.50", -1200.0 -> "-$1,200.00", 0.0 -> "$0.00".
+fn fmt_pnl(v: f64) -> String {
+    if v > 0.0 {
+        format!("+{}", fmt_money(v))
+    } else {
+        fmt_money(v)
+    }
 }
 
 /// Minimal HTML escaping for user-supplied text (usernames).
@@ -307,22 +434,33 @@ enum Align {
     Right,
 }
 
-/// Render an aligned, box-drawn monospace table (a real terminal table).
-fn build_table(headers: &[&str], aligns: &[Align], rows: &[Vec<String>]) -> String {
+/// One table cell. `visible` is the bare text that drives column width and
+/// alignment; `html` is what we actually emit (already HTML-escaped). For most
+/// cells the two carry the same text, but the leaderboard's member column keeps
+/// the bare username in `visible` while `html` holds an `<a>` link — so the
+/// link can't throw off padding and we never have to string-replace a rendered
+/// table (which used to mislink numeric/duplicate usernames).
+struct Cell {
+    visible: String,
+    html: String,
+}
+
+/// A plain auto-escaped cell (`visible` == unescaped text, `html` == escaped).
+fn cell(s: &str) -> Cell {
+    Cell { visible: s.to_string(), html: esc(s) }
+}
+
+/// Render an aligned, box-drawn monospace table from pre-built cells. Borders
+/// are raw box-drawing characters; each cell's `html` is emitted verbatim and
+/// padded by its `visible` width.
+fn build_table_cells(headers: &[&str], aligns: &[Align], rows: &[Vec<Cell>]) -> String {
     let ncols = headers.len();
     let mut widths: Vec<usize> = headers.iter().map(|h| h.chars().count()).collect();
     for row in rows {
-        for (i, cell) in row.iter().enumerate() {
-            widths[i] = widths[i].max(cell.chars().count());
+        for (i, c) in row.iter().enumerate() {
+            widths[i] = widths[i].max(c.visible.chars().count());
         }
     }
-    let pad = |cell: &str, i: usize| -> String {
-        let fill = widths[i].saturating_sub(cell.chars().count());
-        match aligns[i] {
-            Align::Left => format!("{}{}", cell, " ".repeat(fill)),
-            Align::Right => format!("{}{}", " ".repeat(fill), cell),
-        }
-    };
     let border = |l: char, m: char, r: char| -> String {
         let mut s = String::new();
         s.push(l);
@@ -332,17 +470,27 @@ fn build_table(headers: &[&str], aligns: &[Align], rows: &[Vec<String>]) -> Stri
         }
         s
     };
-    let row_str = |cells: &[String]| -> String {
+    let row_str = |cells: &[Cell]| -> String {
         let mut s = String::from("│");
-        for (i, cell) in cells.iter().enumerate() {
+        for (i, c) in cells.iter().enumerate() {
+            let spaces = " ".repeat(widths[i].saturating_sub(c.visible.chars().count()));
             s.push(' ');
-            s.push_str(&pad(cell, i));
+            match aligns[i] {
+                Align::Left => {
+                    s.push_str(&c.html);
+                    s.push_str(&spaces);
+                }
+                Align::Right => {
+                    s.push_str(&spaces);
+                    s.push_str(&c.html);
+                }
+            }
             s.push_str(" │");
         }
         s
     };
 
-    let header_cells: Vec<String> = headers.iter().map(|h| h.to_string()).collect();
+    let header_cells: Vec<Cell> = headers.iter().map(|h| cell(h)).collect();
     let mut out = String::new();
     out.push_str(&border('┌', '┬', '┐'));
     out.push('\n');
@@ -356,6 +504,16 @@ fn build_table(headers: &[&str], aligns: &[Align], rows: &[Vec<String>]) -> Stri
     }
     out.push_str(&border('└', '┴', '┘'));
     out
+}
+
+/// Convenience wrapper: build a table from plain string cells (auto-escaped).
+/// The returned string is already HTML-safe — callers must NOT escape it again.
+fn build_table(headers: &[&str], aligns: &[Align], rows: &[Vec<String>]) -> String {
+    let cells: Vec<Vec<Cell>> = rows
+        .iter()
+        .map(|r| r.iter().map(|s| cell(s)).collect())
+        .collect();
+    build_table_cells(headers, aligns, &cells)
 }
 
 const STYLE: &str = r#"
@@ -405,6 +563,17 @@ svg.chart {
   background: #050505; border: 1px solid #1a1a1a; border-radius: 3px;
   margin: 4px 0 14px;
 }
+form.search { display: flex; gap: 8px; margin: 0; }
+form.search input {
+  flex: 1; background: #0c0c0c; border: 1px solid #333; border-radius: 3px;
+  color: #f0f0f0; font: inherit; font-size: 14px; padding: 6px 10px;
+}
+form.search input::placeholder { color: #666; }
+form.search button {
+  background: transparent; border: 1px solid #f0f0f0; border-radius: 3px;
+  color: #f0f0f0; font: inherit; font-size: 14px; padding: 6px 14px; cursor: pointer;
+}
+form.search button:hover { background: #f0f0f0; color: #000; }
 @media (max-width: 640px) { pre.board { font-size: 11px; } }
 "#;
 
@@ -469,6 +638,28 @@ q   Ctrl-c      quit</pre>
 </section>
 <p class="nav"><a href="/">← back to leaderboard</a>  ·  <a href="/start">→ python client</a></p>"##;
 
+/// Static rules / about copy. Answers the two questions new members always ask:
+/// "is this real money?" and "how is my score calculated?". The net-worth
+/// formula mirrors `compute_net_worth` in the sim so it stays accurate.
+const ABOUT: &str = r##"<section class="onboard">
+<h2><span class="dim">$</span> what is predlab?</h2>
+<p>PredLab is the paper-trading playground for the <strong>NCSSM Prediction Markets Club</strong>. You trade Polymarket-style yes/no markets with <strong>$25,000 of fake money</strong>, practice real strategies, and climb a live club leaderboard.</p>
+<p class="dim">Paper trading only · not affiliated with Polymarket · educational use · the money is fake, the prices are real.</p>
+
+<h2 style="margin-top:18px"><span class="dim">$</span> how the markets work</h2>
+<p>A market asks a yes/no question (“Will X happen?”). You buy <strong>YES</strong> or <strong>NO</strong> shares priced $0.01–$0.99 — the price <em>is</em> the market's implied probability. A winning share pays <strong>$1.00</strong> at resolution; a losing share pays <strong>$0</strong>. Prices are pulled live from the real Polymarket Gamma API, but there is <strong>no house market-maker</strong>: your order fills only when another member takes the other side.</p>
+
+<h2 style="margin-top:18px"><span class="dim">$</span> how your score is computed</h2>
+<pre class="snippet">net worth = free cash
+          + open positions marked at the current price
+          + cash escrowed in your resting buy orders</pre>
+<p>That net-worth figure is your leaderboard score, and the <strong>P&amp;L</strong> column shows it against the $25,000 you started with. Your line on your profile page updates on every fill and every few minutes.</p>
+
+<h2 style="margin-top:18px"><span class="dim">$</span> fair play &amp; AI</h2>
+<p>AI use is <strong>unrestricted and encouraged</strong> — bring your own model, framework, or none at all. It's fake money and a learning sandbox: experiment freely, but don't try to break the sim for everyone else.</p>
+</section>
+<p class="nav"><a href="/">← back to leaderboard</a> · <a href="/markets">→ browse markets</a> · <a href="/start">→ get a key</a></p>"##;
+
 /// Full HTML document with the shared terminal styling. `refresh` adds a
 /// meta-refresh (the auto-updating leaderboard uses it; the start page omits it).
 fn document(title: &str, refresh: Option<u32>, body: &str) -> String {
@@ -508,8 +699,10 @@ fn page_shell(board_inner: &str) -> String {
     );
     let body = format!(
         "<pre class=\"board\">{board}</pre>\n\
-         <p class=\"nav\">new here? <a href=\"/start\">→ get your key &amp; start trading</a> · \
-         <a href=\"/tui\">→ install the terminal client</a></p>",
+         <p class=\"nav\"><a href=\"/markets\">→ browse markets</a> · \
+         <a href=\"/about\">→ rules</a> · \
+         <a href=\"/start\">→ get your key</a> · \
+         <a href=\"/tui\">→ terminal client</a></p>",
         board = board,
     );
     document("predlab · leaderboard", Some(REFRESH_SECS), &body)
@@ -525,41 +718,148 @@ fn render_tui_page() -> String {
     document("predlab · TUI client", None, TUI_ONBOARD)
 }
 
-fn render_page(rows: &[Leader]) -> String {
+/// Aggregate club metrics rendered as a kv block above the board — gives a
+/// sense of the whole cohort, not just the top few. Reads only fields already
+/// present in the `/admin/leaderboard` response.
+fn club_stats(rows: &[Leader], start_balance: f64) -> String {
+    let n = rows.len();
+    let total: f64 = rows.iter().map(|l| l.net_worth).sum();
+    let avg = total / n as f64;
+    let mut nws: Vec<f64> = rows.iter().map(|l| l.net_worth).collect();
+    nws.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    let median = if n % 2 == 1 {
+        nws[n / 2]
+    } else {
+        (nws[n / 2 - 1] + nws[n / 2]) / 2.0
+    };
+    let beating = rows.iter().filter(|l| l.net_worth > start_balance).count();
+    let cash: f64 = rows.iter().map(|l| l.cash).sum();
+    let deployed: f64 = rows.iter().map(|l| l.positions_value).sum();
+    let kv = format!(
+        "  {:<14}{}\n  {:<14}{}\n  {:<14}{}\n  {:<14}{}\n  {:<14}{} / {}\n  {:<14}{}  (free cash {})",
+        "members",
+        n,
+        "paper AUM",
+        fmt_money(total),
+        "avg net worth",
+        fmt_money(avg),
+        "median",
+        fmt_money(median),
+        "beating start",
+        beating,
+        n,
+        "deployed",
+        fmt_money(deployed),
+        fmt_money(cash),
+    );
+    format!("<span class=\"dim\"># club stats</span>\n{}", esc(&kv))
+}
+
+fn render_page(rows: &[Leader], start_balance: f64) -> String {
     if rows.is_empty() {
         return page_shell(&esc("  (no members yet — check back once keys are issued)"));
     }
-    let displays: Vec<String> = rows.iter().map(|l| truncate(&l.username, 28)).collect();
-    let data: Vec<Vec<String>> = rows
+    // Each row's MEMBER cell carries the bare (truncated) username for width but
+    // an `<a>` link for output — so numeric or duplicate-prefix usernames can no
+    // longer collide with rank/money digits the way a flat string-replace did.
+    let cells: Vec<Vec<Cell>> = rows
         .iter()
         .enumerate()
         .map(|(i, l)| {
+            let disp = truncate(&l.username, 28);
+            let link = format!(
+                r#"<a href="/u/{}">{}</a>"#,
+                url_path_encode(&l.username),
+                esc(&disp),
+            );
             vec![
-                (i + 1).to_string(),
-                displays[i].clone(),
-                fmt_money(l.net_worth),
+                cell(&(i + 1).to_string()),
+                Cell { visible: disp, html: link },
+                cell(&fmt_money(l.net_worth)),
+                cell(&fmt_pnl(l.net_worth - start_balance)),
             ]
         })
         .collect();
-    let table = build_table(
-        &["#", "MEMBER", "NET WORTH"],
-        &[Align::Right, Align::Left, Align::Right],
-        &data,
+    let table = build_table_cells(
+        &["#", "MEMBER", "NET WORTH", "P&L"],
+        &[Align::Right, Align::Left, Align::Right, Align::Right],
+        &cells,
     );
-    // Escape the whole table first so all user-supplied text is HTML-safe,
-    // then turn each (still unique) username into a link to its profile.
-    let mut html = esc(&table);
-    for (i, l) in rows.iter().enumerate() {
-        let escaped = esc(&displays[i]);
-        let link = format!(
-            r#"<a href="/u/{}">{}</a>"#,
-            url_path_encode(&l.username),
-            escaped,
-        );
-        // Replace exactly once: usernames are unique on the leaderboard.
-        html = html.replacen(&escaped, &link, 1);
+    let stats = club_stats(rows, start_balance);
+    page_shell(&format!("{stats}\n\n{table}"))
+}
+
+/// The markets browser page: the club's tradable catalog as a terminal table,
+/// with a no-JS search box and prev/next paging.
+fn render_markets_page(markets: &[Market], q: &str, offset: u32) -> String {
+    let table = if markets.is_empty() {
+        esc("  (no markets match — try a different search)")
+    } else {
+        let rows: Vec<Vec<String>> = markets
+            .iter()
+            .map(|m| {
+                let yes = m
+                    .outcome_prices
+                    .first()
+                    .and_then(|s| s.parse::<f64>().ok())
+                    .map(|p| format!("{:.0}%", p * 100.0))
+                    .unwrap_or_else(|| "—".to_string());
+                let spread = match (m.best_bid, m.best_ask) {
+                    (Some(b), Some(a)) if a >= b => format!("{:.0}¢", (a - b) * 100.0),
+                    _ => "—".to_string(),
+                };
+                let vol = m.volume.map(fmt_money).unwrap_or_else(|| "—".to_string());
+                vec![truncate(&m.question, 52), yes, spread, vol]
+            })
+            .collect();
+        build_table(
+            &["MARKET", "YES", "SPREAD", "VOLUME"],
+            &[Align::Left, Align::Right, Align::Right, Align::Right],
+            &rows,
+        )
+    };
+
+    // No-JS search form + prev/next paging links.
+    let search = format!(
+        "<form class=\"search\" method=\"get\" action=\"/markets\">\
+         <input type=\"text\" name=\"q\" value=\"{}\" placeholder=\"search markets…\" autocomplete=\"off\">\
+         <button type=\"submit\">search</button></form>",
+        esc(q),
+    );
+    let qenc = url_path_encode(q);
+    let mut pager = String::new();
+    if offset >= 50 {
+        pager.push_str(&format!(
+            "<a href=\"/markets?q={}&offset={}\">← prev</a>  ",
+            qenc,
+            offset - 50,
+        ));
     }
-    page_shell(&html)
+    if markets.len() == 50 {
+        pager.push_str(&format!(
+            "<a href=\"/markets?q={}&offset={}\">next →</a>",
+            qenc,
+            offset + 50,
+        ));
+    }
+
+    let board = format!(
+        "<span class=\"dim\">$</span> predlab markets\n\n{}\n\n\
+         <span class=\"dim\"># live Polymarket prices · YES = implied probability · paper trading only</span>",
+        table,
+    );
+    let body = format!(
+        "{search}\n<pre class=\"board\">{board}</pre>\n\
+         <p class=\"nav\">{pager}</p>\n\
+         <p class=\"nav\"><a href=\"/\">← back to leaderboard</a> · \
+         <a href=\"/start\">→ get a key &amp; trade</a></p>",
+    );
+    document("predlab · markets", None, &body)
+}
+
+/// Static rules / about page: what the game is and exactly how the score works.
+fn render_about_page() -> String {
+    document("predlab · rules", None, ABOUT)
 }
 
 fn render_error(msg: &str) -> String {
@@ -571,6 +871,11 @@ fn render_error(msg: &str) -> String {
 // ---------------------------------------------------------------------------
 
 async fn profile(Path(username): Path<String>, State(st): State<AppState>) -> Html<String> {
+    // Staff/seed accounts are hidden from the public board (EXCLUDE_USERS); keep
+    // them off the public profile route too rather than leaking their portfolio.
+    if st.exclude.contains(&username) {
+        return Html(render_profile_error(&username, "no such member"));
+    }
     let detail = match fetch_user_detail(&st, &username).await {
         Ok(d) => d,
         Err(e) => return Html(render_profile_error(&username, &e.to_string())),
@@ -754,7 +1059,7 @@ fn render_positions_block(positions: &[DetailPosition]) -> String {
         ],
         &rows,
     );
-    format!("{title}\n\n{}", esc(&table))
+    format!("{title}\n\n{table}")
 }
 
 fn render_trades_block(trades: &[DetailTrade]) -> String {
@@ -785,7 +1090,7 @@ fn render_trades_block(trades: &[DetailTrade]) -> String {
         ],
         &rows,
     );
-    format!("{title}\n\n{}", esc(&table))
+    format!("{title}\n\n{table}")
 }
 
 fn render_profile_page(d: &UserDetail, rank: Option<usize>) -> String {
@@ -839,7 +1144,7 @@ mod tests {
     use super::*;
 
     fn leader(name: &str, net: f64) -> Leader {
-        Leader { username: name.into(), net_worth: net }
+        Leader { username: name.into(), net_worth: net, cash: net, positions_value: 0.0 }
     }
 
     #[test]
@@ -852,7 +1157,7 @@ mod tests {
     #[test]
     fn table_lists_members_in_order() {
         let rows = vec![leader("alice", 55000.0), leader("bob", 40000.0)];
-        let html = render_page(&rows);
+        let html = render_page(&rows, 25000.0);
         assert!(html.contains("MEMBER") && html.contains("NET WORTH"));
         assert!(html.contains("alice"));
         assert!(html.contains("$55,000.00"));
@@ -864,14 +1169,42 @@ mod tests {
 
     #[test]
     fn empty_roster_renders_placeholder() {
-        assert!(render_page(&[]).contains("no members yet"));
+        assert!(render_page(&[], 25000.0).contains("no members yet"));
+    }
+
+    #[test]
+    fn board_has_pnl_column_and_club_stats() {
+        let rows = vec![leader("alice", 30000.0), leader("bob", 20000.0)];
+        let html = render_page(&rows, 25000.0);
+        // P&L column header (escaped) + a signed gain and an (unsigned) loss
+        assert!(html.contains("P&amp;L"));
+        assert!(html.contains("+$5,000.00")); // alice up 5k
+        assert!(html.contains("-$5,000.00")); // bob down 5k
+        // club-stats block
+        assert!(html.contains("# club stats"));
+        assert!(html.contains("members"));
+        assert!(html.contains("paper AUM"));
+        assert!(html.contains("$50,000.00")); // total AUM
+        assert!(html.contains("beating start"));
+        assert!(html.contains("1 / 2")); // only alice beats the $25k start
+    }
+
+    #[test]
+    fn numeric_username_links_to_its_own_profile_not_rank_digits() {
+        // A member literally named "1" must not have the rank-1 digit linkified
+        // out from under it (the old flat string-replace bug).
+        let html = render_page(&[leader("1", 30000.0), leader("2", 20000.0)], 25000.0);
+        assert!(html.contains(r#"<a href="/u/1">1</a>"#));
+        assert!(html.contains(r#"<a href="/u/2">2</a>"#));
     }
 
     #[test]
     fn leaderboard_links_to_start_and_tui_pages() {
-        let html = render_page(&[leader("alice", 25000.0)]);
+        let html = render_page(&[leader("alice", 25000.0)], 25000.0);
         assert!(html.contains(r#"href="/start""#));
         assert!(html.contains(r#"href="/tui""#));
+        assert!(html.contains(r#"href="/markets""#));
+        assert!(html.contains(r#"href="/about""#));
         // onboarding itself is NOT on the board page anymore
         assert!(!html.contains("pip install requests"));
     }
@@ -897,7 +1230,7 @@ mod tests {
 
     #[test]
     fn username_is_escaped() {
-        let html = render_page(&[leader("<script>", 0.0)]);
+        let html = render_page(&[leader("<script>", 0.0)], 25000.0);
         assert!(!html.contains("<script>"));
         assert!(html.contains("&lt;script&gt;"));
     }
@@ -906,7 +1239,7 @@ mod tests {
 
     #[test]
     fn leaderboard_username_is_a_link_to_profile() {
-        let html = render_page(&[leader("teddy", 29444.44)]);
+        let html = render_page(&[leader("teddy", 29444.44)], 25000.0);
         assert!(html.contains(r#"<a href="/u/teddy">teddy</a>"#));
     }
 
@@ -1060,5 +1393,82 @@ mod tests {
         assert!(s.contains(r#""rank":1"#));
         assert!(s.contains(r#""username":"teddy""#));
         assert!(s.contains(r#""net_worth":29444.44"#));
+    }
+
+    // --- pnl / markets / about -----------------------------------------
+
+    #[test]
+    fn fmt_pnl_signs_gains_and_losses() {
+        assert_eq!(fmt_pnl(4444.5), "+$4,444.50");
+        assert_eq!(fmt_pnl(-1200.0), "-$1,200.00");
+        assert_eq!(fmt_pnl(0.0), "$0.00");
+    }
+
+    fn market(question: &str, yes: &str, bid: Option<f64>, ask: Option<f64>, vol: Option<f64>) -> Market {
+        Market {
+            question: question.into(),
+            outcome_prices: vec![yes.into(), "0.5".into()],
+            best_bid: bid,
+            best_ask: ask,
+            volume: vol,
+        }
+    }
+
+    #[test]
+    fn markets_page_renders_table_search_and_questions() {
+        let ms = vec![
+            market("Will it rain tomorrow?", "0.62", Some(0.60), Some(0.64), Some(12345.0)),
+            market("Will the bill pass?", "0.10", None, None, None),
+        ];
+        let html = render_markets_page(&ms, "rain", 0);
+        assert!(html.contains("predlab markets"));
+        assert!(html.contains("MARKET") && html.contains("YES") && html.contains("SPREAD"));
+        assert!(html.contains("Will it rain tomorrow?"));
+        assert!(html.contains("62%")); // YES price as a percent
+        assert!(html.contains("$12,345.00")); // volume
+        assert!(html.contains("—")); // missing bid/ask -> em dash spread
+        // search box echoes the query (escaped) and no auto-refresh
+        assert!(html.contains(r#"value="rain""#));
+        assert!(!html.contains("http-equiv=\"refresh\""));
+    }
+
+    #[test]
+    fn markets_page_paging_links_appear_only_when_warranted() {
+        // first page, fewer than a full page -> no prev, no next
+        let one = vec![market("q", "0.5", None, None, None)];
+        let html = render_markets_page(&one, "", 0);
+        assert!(!html.contains("prev") && !html.contains("next"));
+        // a full page at a later offset -> both prev and next
+        let full: Vec<Market> = (0..50).map(|_| market("q", "0.5", None, None, None)).collect();
+        let html = render_markets_page(&full, "", 50);
+        assert!(html.contains("prev") && html.contains("next"));
+        assert!(html.contains("offset=0") && html.contains("offset=100"));
+    }
+
+    #[test]
+    fn empty_markets_render_placeholder() {
+        let html = render_markets_page(&[], "zzz", 0);
+        assert!(html.contains("no markets match"));
+    }
+
+    #[test]
+    fn about_page_explains_money_and_score() {
+        let html = render_about_page();
+        assert!(html.contains("what is predlab"));
+        assert!(html.contains("$25,000"));
+        assert!(html.contains("net worth ="));
+        assert!(html.contains("escrowed")); // the often-forgotten third term
+        assert!(html.contains(r#"href="/""#)); // back to leaderboard
+        assert!(!html.contains("http-equiv=\"refresh\"")); // static page
+    }
+
+    #[test]
+    fn user_detail_serializes_for_json_profile() {
+        let d = detail(vec![pt("2026-05-22T00:00:00", 25_000.0)]);
+        let s = serde_json::to_string(&d).unwrap();
+        assert!(s.contains(r#""username":"teddy""#));
+        assert!(s.contains(r#""net_worth":29444.44"#));
+        // history point keeps its wire key "t"
+        assert!(s.contains(r#""t":"2026-05-22T00:00:00""#));
     }
 }

@@ -90,10 +90,10 @@ For your cash and total net worth (the number that ranks you):
 
 ```bash
 curl https://poly.teddytennant.com/portfolio -H "POLY_API_KEY: pm_paper_REPLACE_ME"
-# -> {"cash": 24994.5, "positions_value": 5.5, "net_worth": 25000.0}
+# -> {"cash": 24994.5, "positions_value": 5.5, "open_orders_value": 0.0, "net_worth": 25000.0}
 ```
 
-**Net worth = free cash + your positions marked at the current market price.** That's your leaderboard score.
+**Net worth = free cash + your positions marked at the current market price + cash escrowed in your resting buy orders.** That's your leaderboard score.
 
 ### Step 6 — Climb the leaderboard
 
@@ -117,7 +117,7 @@ curl https://poly.teddytennant.com/positions -H "POLY_API_KEY: pm_paper_REPLACE_
 curl https://poly.teddytennant.com/portfolio -H "POLY_API_KEY: pm_paper_REPLACE_ME"
 ```
 
-**Key needed** for anything touching your account (orders, positions, portfolio, balance) — without it you get `401`. **No key** for public market data (`/markets`, `/book`, `/midpoint`, `/spread`, `/last-trade-price`).
+**Key needed** for anything touching your account (orders, positions, portfolio) — without it you get `401`. **No key** for public market data (`/markets`, `/book`, `/midpoint`, `/spread`, `/last-trade-price`).
 
 ### Troubleshooting
 

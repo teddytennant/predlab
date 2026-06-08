@@ -6,8 +6,8 @@ No SDK needed; only `requests` required (pip install -r requirements.txt).
 
 Quick start (use the key your admin gave you):
 
-    export POLY_KEY="pm_paper_..."     # your Polymarket paper API key
-    python predlab.py                  # smoke test (read-only)
+    export POLY_API_KEY="pm_paper_..."     # your Polymarket paper API key
+    python predlab.py                      # smoke test (read-only)
 
 Override POLY_BASE to point at a local sim instead of the club host.
 """
@@ -35,11 +35,15 @@ class PolymarketClient:
 
     def markets(self, **params: Any) -> Any:
         """List markets. e.g. markets(limit=5)."""
-        return requests.get(f"{self.base}/markets", params=params, timeout=15).json()
+        r = requests.get(f"{self.base}/markets", params=params, timeout=15)
+        r.raise_for_status()
+        return r.json()
 
     def book(self, token_id: str) -> Any:
         """Order book for one outcome token."""
-        return requests.get(f"{self.base}/book", params={"token_id": token_id}, timeout=15).json()
+        r = requests.get(f"{self.base}/book", params={"token_id": token_id}, timeout=15)
+        r.raise_for_status()
+        return r.json()
 
     def positions(self) -> Any:
         """Your positions (requires POLY_KEY)."""
@@ -56,10 +60,21 @@ class PolymarketClient:
         r.raise_for_status()
         return r.json()
 
+    def cancel_order(self, order_id: int | str) -> Any:
+        """Cancel one of your resting orders by id (requires POLY_API_KEY).
+
+        Use this to clear an order that's still `open` (unfilled) — the buy
+        escrow is refunded to your cash.
+        """
+        body = {"orderID": str(order_id)}
+        r = requests.delete(f"{self.base}/order", json=body, headers=self._headers(), timeout=15)
+        r.raise_for_status()
+        return r.json()
+
 
 def _smoke() -> None:
     """Quick connectivity + auth check."""
-    poly = PolymarketClient(api_key=os.environ.get("POLY_KEY"))
+    poly = PolymarketClient(api_key=os.environ.get("POLY_API_KEY"))
     mkts = poly.markets(limit=1)
     print(f"✅ Polymarket reachable — sample: {str(mkts)[:80]}…")
     if poly.key:
@@ -68,7 +83,7 @@ def _smoke() -> None:
         except Exception as e:
             print(f"   (positions check failed: {e})")
     else:
-        print("   (set POLY_KEY to also test authenticated calls)")
+        print("   (set POLY_API_KEY to also test authenticated calls)")
 
 
 if __name__ == "__main__":

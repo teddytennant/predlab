@@ -3,10 +3,11 @@ Core paper trading service for polymarket-sim (Phase 2 Fidelity).
 
 Responsibilities:
 - Balance checks + escrow on order placement (buy notional reserved from cash)
-- Position management (long only per outcome token for MVP)
+- Position management (long or short per outcome token; a sell past your holdings
+  opens a short that compute_net_worth marks as a liability)
 - Fill processing: create Trade rows, update Positions, settle cash vs shares
 - Mark-to-market P&L calculation using latest Market prices (best mid or last)
-- Simple resolution settlement (manual force + hook for auto on sync when closed)
+- Resolution settlement via the manual admin force-resolve path
 - Helpers for user queries (open orders, positions with unrealized P&L)
 
 All amounts use float for simplicity in MVP (Numeric in DB but we cast). Production would
@@ -90,12 +91,6 @@ def _current_price_for_token(db: Session, token_id: str) -> float:
 # ---------------------------------------------------------------------------
 
 
-def get_available_balance(db: Session, user: User) -> float:
-    """Free cash balance (does not subtract open buy escrows for ultra-simple MVP)."""
-    acct = ensure_paper_account(db, user)
-    return float(acct.balance_usd)
-
-
 def _adjust_balance(db: Session, user: User, delta: float, reason: str) -> PaperAccount:
     """Internal: mutate paper balance. delta positive = credit."""
     acct = ensure_paper_account(db, user)
@@ -150,7 +145,8 @@ def update_position_on_fill(
     """
     Update (or create) position after a successful fill.
     - buy: increase size, update VWAP avg_entry
-    - sell: decrease size (allow going to 0, not negative for MVP)
+    - sell: decrease size; selling past your holdings drives size negative (a
+      short), which compute_net_worth values as a liability at the current mark
     """
     pos = get_or_create_position(db, user, market, clob_token_id)
     # Numeric columns reload from the DB as Decimal; coerce so arithmetic with
@@ -794,14 +790,3 @@ def force_resolve_market(db: Session, market_id: str, resolution: str = "yes") -
         "positions_settled": settled,
         "total_payout": total_payout,
     }
-
-
-# Auto-detect hook (called from sync after upsert if market now closed)
-def maybe_auto_settle_on_sync(db: Session, market: Market) -> None:
-    if market.closed and not market.active:
-        # If already has positions, we could settle at 1.0 / 0.0 based on last known outcomePrices
-        # For MVP: only log; real auto would look at resolved outcome from gamma (future field)
-        logger.info(
-            "Market %s closed in upstream - admin can call force_resolve for settlement demo",
-            market.id,
-        )

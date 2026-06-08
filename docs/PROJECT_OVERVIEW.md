@@ -17,7 +17,8 @@ API.
 A market asks a yes/no question ("Will X happen?"). You buy **YES** or **NO** shares
 priced $0.01–$0.99 — the price *is* the market's implied probability. A winning share pays
 $1.00 at resolution; a losing share pays $0. Your **net worth = free cash + positions
-marked at the current price**, and that's your leaderboard score.
+marked at the current price + cash escrowed in resting buy orders**, and that's your
+leaderboard score.
 
 The simulator pulls live prices for the real, liquid Polymarket catalog from the public
 **Gamma API** (`gamma-api.polymarket.com`, read-only, no key) and exposes drop-in-style
@@ -75,4 +76,6 @@ predlab/
 ```
 
 See [`REVIEW_REPORT.md`](REVIEW_REPORT.md) for the latest full security/correctness audit,
-and [`telegram/`](telegram/) for the community channel plan and ready-to-post content.
+[`OPERATIONS.md`](OPERATIONS.md) for the weekly meeting runbook, [`ROADMAP.md`](ROADMAP.md)
+for what's left before launch, and [`telegram/`](telegram/) for the community channel plan
+and ready-to-post content.

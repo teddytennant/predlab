@@ -4,8 +4,8 @@ FastAPI application factory for the Polymarket API Simulator (Phase 2 Fidelity).
 - Full P0/P1 CLOB surface for SDK compatibility: /book, /midpoint, /spread, /last-trade-price,
   POST /order + /orders, DELETE /order, user data paths (/data/orders, /data/trades)
 - Paper trading engine: auth via paper API keys (POLY_API_KEY header), balance escrow,
-  position updates, mark-to-market P&L, manual + auto settlement hooks
-- GET /markets (enhanced filters + pagination stub), /events (gamma pass-through)
+  position updates, mark-to-market P&L, manual admin force-resolve settlement
+- GET /markets (filters + offset/limit pagination + question search), /events (markets feed)
 - All responses shaped for drop-in use by py-clob-client-v2 and raw httpx
 - Admin ops gated by X-Admin-Secret (reset, force resolve)
 
@@ -241,7 +241,7 @@ def create_app() -> FastAPI:
         active: bool = True,
         limit: int = 50,
         offset: int = 0,
-        q: str | None = None,  # simple search stub on question
+        q: str | None = None,  # case-insensitive substring search on the question
         session: Session = Depends(get_session),
     ) -> list[MarketOut]:
         """Full GET /markets with filters and pagination.
@@ -287,12 +287,16 @@ def create_app() -> FastAPI:
 
     @app.get("/events", tags=["markets"])
     async def list_events(limit: int = 10) -> list[dict[str, Any]]:
-        """GET /events — pass-through to real Gamma for fidelity (P0)."""
+        """GET /events — top markets by volume from Gamma.
+
+        Note: this returns the markets feed, not Gamma's grouped-event objects.
+        It exists so SDKs that probe ``/events`` get a non-empty, market-shaped
+        response; switch to a real Gamma events fetch if grouped events are needed.
+        """
         from .clients.gamma import GammaClient
 
         client = GammaClient()
         try:
-            # Stub: real /events would add fetch_events; reuse the markets feed for now.
             raw = await client.fetch_markets_by_volume(
                 min_volume=0, max_markets=limit, page_size=min(max(limit, 1), 100), pace_seconds=0
             )
@@ -472,9 +476,7 @@ def create_app() -> FastAPI:
             body = []
         results = []
         for item in body[:10]:  # safety
-            # Reuse single logic by faking request? Simpler: call place directly
-            # For brevity in this slice we treat batch as multiple singles
-            # (real client may send array of signed)
+            # Treat a batch as independent single orders.
             parsed = {
                 "token_id": item.get("tokenId") or item.get("asset_id"),
                 "side": "buy" if str(item.get("side", "")).upper() == "BUY" else "sell",
@@ -486,8 +488,6 @@ def create_app() -> FastAPI:
                 m = _find_market_for_token(session, parsed.get("token_id") or "")
                 mkt = parsed["market_id"] or (m.id if m else None)
                 if not mkt or not parsed.get("token_id"):
-                    results.append(PostOrderResponse(success=False, orderID="0", status="error"))
-                    continue
                     results.append(PostOrderResponse(success=False, orderID="0", status="error"))
                     continue
                 o = place_paper_order(
