@@ -132,6 +132,23 @@ def reset_orderbook(token_id: str | None = None) -> None:
         _order_books.clear()
 
 
+def remove_resting_order(order_id: int) -> bool:
+    """Drop a single resting entry (by DB order id) from whichever book holds it.
+
+    The book is in-memory and outlives the DB status change, so a cancelled order
+    left here would keep matching incoming orders — handing the canceller a fill
+    *after* their escrow was already refunded (a double credit). Returns True if an
+    entry was removed.
+    """
+    for book in _order_books.values():
+        before = len(book.bids) + len(book.asks)
+        book.bids = [e for e in book.bids if e.id != order_id]
+        book.asks = [e for e in book.asks if e.id != order_id]
+        if len(book.bids) + len(book.asks) < before:
+            return True
+    return False
+
+
 def remove_user_orders(user_id: int) -> int:
     """Drop all of a user's resting entries from every book (admin reset/delete).
 

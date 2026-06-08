@@ -17,6 +17,10 @@ The real issues are a small number of **paper-accounting money-conservation bugs
 secret leaks, and none affect the legitimacy of the API/endpoints — they're correctness and
 hardening items. Priority order is below.
 
+> **Update (2026-06-08):** all three 🔴 HIGH findings are now **fixed** (commit on `main`)
+> with regression tests — suite is now **61/61 passing**. See the ✅ notes on each below; the
+> 🟠/🟡 items remain open.
+
 ## Verdict on the explicit asks
 
 | Question | Answer |
@@ -39,6 +43,9 @@ markets (decide winners), reset balances, mint owner keys, and delete users.
 **Fix:** refuse to boot (or disable secret-based owner auth) when `admin_secret` is empty or
 equals a known placeholder and `environment` is production-like. *Confirmed by two
 independent agents + manual read.*
+**✅ FIXED:** `config.py` now has a `model_validator` that raises on a placeholder/empty
+`admin_secret` whenever `environment` isn't dev/local. Dev still boots on the default.
+Tests: `tests/test_config.py`.
 
 ### 🔴 HIGH — Naked short sell creates money from nothing
 `paper_trading.py:249-253` (sell branch) + `:165-177` (`update_position_on_fill`).
@@ -48,6 +55,11 @@ going negative. A user with zero shares can sell into a resting bid, pocket cash
 0 position — pure money creation that inflates leaderboard net worth.
 **Fix:** reject sells exceeding current position size (mirror the buy-side balance check), or
 track and value negative (short) positions in `compute_net_worth`.
+**✅ FIXED (short-tracking option):** rejecting sells would break the engine's maker-seeding
+model (makers rest naked asks to create a two-sided book — encoded in the test suite). Instead
+`update_position_on_fill` now lets the position go **negative**; the short is marked as a
+liability by `compute_net_worth` (`size * mark`), so the sale proceeds are offset and net worth
+no longer inflates. Test: `test_naked_sell_opens_short_and_does_not_mint_money`.
 
 ### 🔴 HIGH — Cancel leaves the resting entry in the book → phantom fills / double credit
 `paper_trading.py:427-447` (`cancel_paper_order`, "removal from live book omitted for MVP").
@@ -57,6 +69,9 @@ cancelled entry; `_settle_resting_counterparty` reloads it, processes the fill, 
 proceeds — **after** it was already refunded. Maker gets refund *plus* fill proceeds.
 **Fix:** remove the entry inside `cancel_paper_order`, and guard `_settle_resting_counterparty`
 to skip makers whose status is `cancelled`.
+**✅ FIXED:** added `remove_resting_order(order_id)` to `orderbook.py`, called from
+`cancel_paper_order`; plus a defensive `status == "cancelled"` guard in
+`_settle_resting_counterparty`. Test: `test_cancelled_order_is_purged_from_book_and_cannot_refill`.
 
 ### 🟠 MEDIUM — Bearer API keys stored plaintext; hashed secret never validated
 `services/auth.py:60-96`. Auth is a plain DB lookup on `ApiKey.key_prefix == api_key`
@@ -156,8 +171,9 @@ Surfaces accounting internals. Low risk on a paper sim.
 - **All documented endpoints exist; all clients match** paths/headers/base URLs.
 - **No SQL injection** — SQLAlchemy ORM / bound params throughout; the one raw statement is a
   static `ALTER TABLE` with no interpolation (`db.py:78-81`).
-- **Tests green:** Python 54/54 (`pytest`), Rust workspace + leaderboard-rs build clean,
-  `cargo clippy --all-targets` zero warnings, `cargo test` all pass.
+- **Tests green:** Python **61/61** (`pytest`, incl. the 3 new HIGH-fix regressions; 54/54
+  at audit time), Rust workspace + leaderboard-rs build clean, `cargo clippy --all-targets`
+  zero warnings, `cargo test` all pass.
 
 ## Recommended fix order
 

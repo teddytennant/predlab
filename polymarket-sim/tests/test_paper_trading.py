@@ -118,6 +118,50 @@ def test_resting_maker_is_settled_on_fill(session, market, starting_balance):
     assert _balance(session, maker) == pytest.approx(starting_balance + 0.30 * 10)
 
 
+def test_naked_sell_opens_short_and_does_not_mint_money(session, market, starting_balance):
+    """A maker selling shares it doesn't hold opens a short, not free money.
+
+    Regression: the sell fill used to clamp the position at 0 while crediting the
+    proceeds — minting paper money and inflating net worth (old result: +$3). Now
+    the position goes to -10 and is marked as a liability, so net worth reflects a
+    real mark-to-market loss instead.
+    """
+    maker = _user(session, "maker")
+    taker = _user(session, "taker")
+    # Maker rests an ask with no position; taker crosses -> maker is short 10.
+    place_paper_order(session, maker, market.id, TOKEN_YES, side="sell", price=0.30, size=10)
+    place_paper_order(session, taker, market.id, TOKEN_YES, side="buy", price=0.50, size=10)
+
+    pos = get_or_create_position(session, maker, market, TOKEN_YES)
+    assert float(pos.size) == pytest.approx(-10)
+    nw = compute_net_worth(session, maker)
+    # Cash up by the 0.30*10 sale, but the -10 short marks at the 0.50 mid (-$5).
+    assert nw["positions_value"] == pytest.approx(-5.0)
+    # Net worth is starting + 3 (cash) - 5 (short) = starting - 2 — NOT starting + 3.
+    assert nw["net_worth"] == pytest.approx(starting_balance - 2.0)
+
+
+def test_cancelled_order_is_purged_from_book_and_cannot_refill(session, market, starting_balance):
+    """Cancelling must remove the resting entry so a later cross can't fill it.
+
+    Regression: the cancelled maker used to stay in the in-memory book, so an
+    incoming order still matched it — double-crediting the canceller whose escrow
+    had already been refunded.
+    """
+    maker = _user(session, "maker")
+    taker = _user(session, "taker")
+    bid = place_paper_order(session, maker, market.id, TOKEN_YES, side="buy", price=0.60, size=10)
+    cancel_paper_order(session, maker, bid.id)
+    assert _balance(session, maker) == pytest.approx(starting_balance)  # escrow refunded
+
+    # Taker sells into where that 0.60 bid used to be; it must not match the cancelled order.
+    sell = place_paper_order(session, taker, market.id, TOKEN_YES, side="sell", price=0.50, size=10)
+    assert sell.status == "open"
+    assert float(sell.filled_size) == 0.0
+    # Maker untouched — no phantom second fill / double credit.
+    assert _balance(session, maker) == pytest.approx(starting_balance)
+
+
 def test_vwap_average_entry_updates_across_fills(session, market):
     alice = _user(session, "alice")
     update_position_on_fill(session, alice, market, TOKEN_YES, 10, 0.40, "buy")

@@ -27,7 +27,13 @@ from sqlalchemy.orm import Session
 
 from ..models.db import Market, NetWorthSnapshot, Order, PaperAccount, Position, Trade, User
 from .auth import ensure_paper_account
-from .orderbook import OrderBookEntry, get_orderbook, remove_user_orders, reset_orderbook
+from .orderbook import (
+    OrderBookEntry,
+    get_orderbook,
+    remove_resting_order,
+    remove_user_orders,
+    reset_orderbook,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -163,16 +169,12 @@ def update_position_on_fill(
         pos.size = new_size
         pos.avg_entry_price = new_avg
     else:  # sell
+        # Let the position go negative — a sell beyond holdings opens a short, which
+        # compute_net_worth marks as a liability at the current price. Clamping to 0
+        # here (the old MVP behaviour) credited the sale proceeds while silently
+        # dropping the shares owed: pure money creation that inflated net worth.
         new_size = old_size - fill_size
-        if new_size < -1e-9:
-            # For educational MVP we clamp; in reality this would be short or error
-            logger.warning(
-                "Sell would make position negative for %s on %s - clamping to 0",
-                user.username,
-                clob_token_id,
-            )
-            new_size = 0.0
-        pos.size = max(0.0, new_size)
+        pos.size = 0.0 if abs(new_size) < 1e-9 else new_size
         if pos.size == 0:
             pos.avg_entry_price = None
 
@@ -247,10 +249,11 @@ def place_paper_order(
         # Escrow: deduct now
         _adjust_balance(db, user, -notional, f"escrow buy {size}@{exec_price}")
     else:
-        # Sell: must have position (or allow 0 for demo)
-        pos = get_or_create_position(db, user, market, clob_token_id)
-        if pos.size < size - 1e-9:
-            logger.info("Sell order placed with insufficient current position (demo allowed)")
+        # Sell: makers rest asks to seed the two-sided book, so a sell beyond
+        # current holdings is allowed and opens a *short* (negative position). The
+        # short is marked as a liability in compute_net_worth, so the sale proceeds
+        # are offset and no paper money is minted (see update_position_on_fill).
+        get_or_create_position(db, user, market, clob_token_id)
 
     # Persist the order (paper)
     order = Order(
@@ -388,6 +391,10 @@ def _settle_resting_counterparty(
     maker_order = db.get(Order, counter_id)
     if maker_order is None:
         return
+    if maker_order.status == "cancelled":
+        # Defensive: a cancelled order should already be out of the book, but never
+        # settle a fill against one — its escrow was refunded on cancel.
+        return
     maker_user = db.get(User, maker_order.user_id)
     if maker_user is None:
         return
@@ -437,9 +444,11 @@ def cancel_paper_order(db: Session, user: User, order_id: int) -> Order:
         _adjust_balance(db, user, refund, f"cancel refund buy order {order_id}")
 
     order.status = "cancelled"
-    # Note: best-effort removal from live book omitted for MVP (simple list book);
-    # the resting entry will eventually age out or be ignored on next hydrate.
-    # Future: add remove_resting(id) to OrderBook.
+    # Purge the resting entry from the in-memory book so it can no longer match.
+    # The book outlives this DB status change, so a cancelled-but-resting order
+    # would otherwise still fill — double-crediting the canceller, who was just
+    # refunded its escrow above.
+    remove_resting_order(order_id)
 
     db.commit()
     db.refresh(order)

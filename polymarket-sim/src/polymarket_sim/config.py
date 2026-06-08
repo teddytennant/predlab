@@ -7,7 +7,20 @@ Follows patterns from Principia homeschool python-backend recommendations.
 
 from functools import lru_cache
 
+from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+# Admin-secret values that are public in the repo (code default + the
+# docker-compose fallback). Booting a production deployment with any of these
+# would hand owner-level access to anyone who reads the source, so we refuse.
+_PLACEHOLDER_ADMIN_SECRETS = frozenset(
+    {
+        "",
+        "change-me-in-prod-for-club",
+        "change-me-set-in-dotenv",
+        "change-me-generate-with-openssl-rand-hex-32",
+    }
+)
 
 
 class Settings(BaseSettings):
@@ -59,6 +72,23 @@ class Settings(BaseSettings):
     @property
     def is_dev(self) -> bool:
         return self.environment.lower() in ("development", "dev", "local")
+
+    @model_validator(mode="after")
+    def _reject_placeholder_admin_secret(self) -> "Settings":
+        """Fail fast if a non-dev deployment is left on a public placeholder secret.
+
+        The default ``admin_secret`` is committed to the repo, so any production
+        deploy that forgets to set ``ADMIN_SECRET`` would otherwise accept a
+        publicly-known owner credential. In dev/local we keep the convenient
+        default so the stack still boots out of the box.
+        """
+        if not self.is_dev and self.admin_secret in _PLACEHOLDER_ADMIN_SECRETS:
+            raise ValueError(
+                "ADMIN_SECRET is unset or a known placeholder while ENVIRONMENT="
+                f"{self.environment!r}. Set a strong secret (openssl rand -hex 32) "
+                "in the environment / .env before deploying."
+            )
+        return self
 
 
 @lru_cache
