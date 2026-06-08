@@ -13,6 +13,7 @@ use ratatui::{
 use crate::api::{LeaderRow, Market, Portfolio, Position};
 use crate::app::{fmt_age, fmt_money, App, LoadState, Mode, Tab};
 use crate::theme;
+use predlab_util::truncate;
 
 pub fn draw(f: &mut Frame, app: &App) {
     let chunks = Layout::default()
@@ -486,8 +487,15 @@ fn render_sparkline(f: &mut Frame, app: &App, area: Rect) {
         .constraints([Constraint::Length(1), Constraint::Min(1)])
         .split(inner);
     f.render_widget(Paragraph::new(header), chunks[0]);
+    // Sparkline scales 0..max, so net-worth values clustered far above zero
+    // would all render as near-full bars. Rebase to `min` (with a small floor
+    // so a dead-flat series still shows a baseline) to make the trend visible.
+    let normalized: Vec<u64> = history
+        .iter()
+        .map(|v| v.saturating_sub(min) + 1)
+        .collect();
     let sparkline = Sparkline::default()
-        .data(&history)
+        .data(&normalized)
         .style(Style::default().fg(theme::PRIMARY))
         .bar_set(symbols::bar::NINE_LEVELS);
     f.render_widget(sparkline, chunks[1]);
@@ -748,12 +756,3 @@ fn render_empty(f: &mut Frame, msg: &str, area: Rect) {
     f.render_widget(para, area);
 }
 
-fn truncate(s: &str, max: usize) -> String {
-    if s.chars().count() <= max {
-        s.to_string()
-    } else {
-        let mut t: String = s.chars().take(max.saturating_sub(1)).collect();
-        t.push('…');
-        t
-    }
-}

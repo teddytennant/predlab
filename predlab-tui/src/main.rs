@@ -94,9 +94,10 @@ async fn run<B: ratatui::backend::Backend>(
     spawn_input_reader(tx.clone());
     // Periodic UI tick: 250 ms keeps the loading spinner animated and ages
     // ("12s ago") current without flooding the channel.
-    spawn_ticker(tx.clone(), Duration::from_millis(250), Event::Tick);
-    // Auto-refresh leaderboard + markets. Portfolio refreshes manually so the
-    // member isn't perpetually hitting the auth-gated endpoint.
+    spawn_ticker(tx.clone(), Duration::from_millis(250));
+    // Auto-refresh the public tabs, plus the portfolio when a key is present —
+    // the latter keeps the "NET WORTH (session)" sparkline accumulating
+    // snapshots without the member having to press `r`.
     spawn_auto_refresh(api.clone(), tx.clone());
 
     // Kick off the initial fetches so every tab is ready by the time the user
@@ -166,7 +167,7 @@ fn spawn_input_reader(tx: UnboundedSender<Event>) {
     });
 }
 
-fn spawn_ticker(tx: UnboundedSender<Event>, every: Duration, ev: Event) {
+fn spawn_ticker(tx: UnboundedSender<Event>, every: Duration) {
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(every);
         // The first tick fires immediately; skip it so the initial draw isn't
@@ -174,14 +175,7 @@ fn spawn_ticker(tx: UnboundedSender<Event>, every: Duration, ev: Event) {
         interval.tick().await;
         loop {
             interval.tick().await;
-            // Event isn't Clone, so we re-create per send. Both variants used
-            // here (Tick / Resize) are unit-payload, so this is cheap.
-            let payload = match &ev {
-                Event::Tick => Event::Tick,
-                Event::Resize => Event::Resize,
-                _ => Event::Tick,
-            };
-            if tx.send(payload).is_err() {
+            if tx.send(Event::Tick).is_err() {
                 break;
             }
         }
@@ -190,11 +184,17 @@ fn spawn_ticker(tx: UnboundedSender<Event>, every: Duration, ev: Event) {
 
 fn spawn_auto_refresh(api: Api, tx: UnboundedSender<Event>) {
     tokio::spawn(async move {
+        // With a key, also poll the portfolio so the session sparkline fills in.
+        let scope = if api.has_key() {
+            RefreshScope::PublicAndPortfolio
+        } else {
+            RefreshScope::Public
+        };
         let mut interval = tokio::time::interval(AUTO_REFRESH);
         interval.tick().await;
         loop {
             interval.tick().await;
-            refresh(&api, &tx, RefreshScope::Public);
+            refresh(&api, &tx, scope);
         }
     });
 }
@@ -207,6 +207,8 @@ enum RefreshScope {
     Tab(Tab),
     /// Auto-refresh: the public, key-less endpoints only.
     Public,
+    /// Auto-refresh for keyed members: public endpoints plus the portfolio.
+    PublicAndPortfolio,
 }
 
 fn refresh(api: &Api, tx: &UnboundedSender<Event>, scope: RefreshScope) {
@@ -214,6 +216,9 @@ fn refresh(api: &Api, tx: &UnboundedSender<Event>, scope: RefreshScope) {
         RefreshScope::All => Tab::ALL.to_vec(),
         RefreshScope::Tab(t) => vec![t],
         RefreshScope::Public => vec![Tab::Leaderboard, Tab::Markets],
+        RefreshScope::PublicAndPortfolio => {
+            vec![Tab::Leaderboard, Tab::Markets, Tab::Portfolio]
+        }
     };
     for t in tabs {
         let api = api.clone();

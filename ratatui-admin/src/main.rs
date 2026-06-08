@@ -21,6 +21,9 @@ use std::io;
 use std::io::Write as _;
 
 use anyhow::{Context, Result};
+// Shared formatting helpers (also used by predlab-tui). The shared `truncate`
+// is char-boundary-safe, unlike the old byte-slicing copy this replaces.
+use predlab_util::{fmt_money, truncate};
 use crossterm::{
     event::{self, Event, KeyCode, KeyEventKind, KeyModifiers},
     execute,
@@ -735,24 +738,6 @@ fn render_leaderboard(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
     f.render_widget(table, area);
 }
 
-/// Format a dollar amount with thousands separators, e.g. 25431.5 -> "$25,431.50".
-fn fmt_money(v: f64) -> String {
-    let neg = v < 0.0;
-    let cents = (v.abs() * 100.0).round() as u64;
-    let whole = cents / 100;
-    let frac = cents % 100;
-    let digits = whole.to_string();
-    let bytes = digits.as_bytes();
-    let mut grouped = String::new();
-    for (i, b) in bytes.iter().enumerate() {
-        if i > 0 && (bytes.len() - i).is_multiple_of(3) {
-            grouped.push(',');
-        }
-        grouped.push(*b as char);
-    }
-    format!("{}${}.{:02}", if neg { "-" } else { "" }, grouped, frac)
-}
-
 fn render_footer(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
     let help = match app.view {
         View::Issue => "Tab/⇧Tab switch tab · ←/→ role · Enter issue · Esc quit",
@@ -768,12 +753,4 @@ fn render_footer(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
     ])
     .block(Block::default().title("Status").borders(Borders::ALL));
     f.render_widget(footer, area);
-}
-
-fn truncate(s: &str, max: usize) -> String {
-    if s.len() <= max {
-        s.to_string()
-    } else {
-        format!("{}…", &s[..max.saturating_sub(1)])
-    }
 }

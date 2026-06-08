@@ -159,18 +159,48 @@ impl App {
 
     /// How many selectable rows the current tab has (for clamp/scroll math).
     pub fn current_list_len(&self) -> usize {
-        match self.tab {
-            Tab::Leaderboard => self
-                .filtered_leaderboard()
-                .map(|v| v.len())
-                .unwrap_or(0),
-            Tab::Markets => self.filtered_markets().map(|v| v.len()).unwrap_or(0),
-            Tab::Portfolio => self
-                .positions
-                .data()
-                .map(|p| p.len())
-                .unwrap_or(0),
+        self.list_len(self.tab)
+    }
+
+    /// Selectable-row count for a specific tab, honoring the active search
+    /// filter but without cloning the underlying data (callers only need the
+    /// length, not the rows).
+    fn list_len(&self, tab: Tab) -> usize {
+        let needle = self.last_search.to_lowercase();
+        match tab {
+            Tab::Leaderboard => match self.leaderboard.data() {
+                Some(rows) if needle.is_empty() => rows.len(),
+                Some(rows) => rows
+                    .iter()
+                    .filter(|r| r.username.to_lowercase().contains(&needle))
+                    .count(),
+                None => 0,
+            },
+            Tab::Markets => match self.markets.data() {
+                Some(rows) if needle.is_empty() => rows.len(),
+                Some(rows) => rows.iter().filter(|m| market_matches(m, &needle)).count(),
+                None => 0,
+            },
+            // Positions aren't search-filtered.
+            Tab::Portfolio => self.positions.data().map(|p| p.len()).unwrap_or(0),
             Tab::Help => 0,
+        }
+    }
+
+    /// Clamp the stored selection for `tab` into `[0, len)` after its dataset
+    /// changed. Safe to call regardless of which tab is currently active.
+    fn clamp_selection(&mut self, tab: Tab) {
+        let len = self.list_len(tab);
+        let sel = match tab {
+            Tab::Leaderboard => &mut self.leaderboard_sel,
+            Tab::Markets => &mut self.markets_sel,
+            Tab::Portfolio => &mut self.positions_sel,
+            Tab::Help => return,
+        };
+        if len == 0 {
+            *sel = 0;
+        } else if *sel >= len {
+            *sel = len - 1;
         }
     }
 
@@ -214,13 +244,7 @@ impl App {
         }
         Some(
             rows.iter()
-                .filter(|m| {
-                    m.question.to_lowercase().contains(&needle)
-                        || m.category
-                            .as_deref()
-                            .map(|c| c.to_lowercase().contains(&needle))
-                            .unwrap_or(false)
-                })
+                .filter(|m| market_matches(m, &needle))
                 .cloned()
                 .collect(),
         )
@@ -316,9 +340,15 @@ impl App {
             KeyCode::Char('r') => return KeyOutcome::RefreshTab(self.tab),
             KeyCode::Char('R') => return KeyOutcome::RefreshAll,
             KeyCode::Char('n') => {
-                // Re-apply last search (jump to next match by leaving filter on).
-                if !self.last_search.is_empty() {
-                    self.status = format!("Filter: /{}", self.last_search);
+                // Jump to the next match. The list is already filtered to
+                // matches, so this advances the selection, wrapping at the end.
+                if !self.last_search.is_empty() && list_len > 0 {
+                    let next = if self.selection() >= max_idx {
+                        0
+                    } else {
+                        self.selection() + 1
+                    };
+                    self.set_selection(next);
                 }
             }
             _ => {}
@@ -450,20 +480,16 @@ impl App {
                     Ok(data) => LoadState::Loaded { data, at: now },
                     Err(e) => LoadState::Error(e),
                 };
-                let n = self.current_list_len();
-                if n > 0 && self.leaderboard_sel >= n {
-                    self.leaderboard_sel = n - 1;
-                }
+                // Clamp against the leaderboard specifically — this fetch can
+                // land while the user is viewing a different tab.
+                self.clamp_selection(Tab::Leaderboard);
             }
             FetchMsg::Markets(res) => {
                 self.markets = match res {
                     Ok(data) => LoadState::Loaded { data, at: now },
                     Err(e) => LoadState::Error(e),
                 };
-                let n = self.current_list_len();
-                if n > 0 && self.markets_sel >= n {
-                    self.markets_sel = n - 1;
-                }
+                self.clamp_selection(Tab::Markets);
             }
             FetchMsg::Portfolio { portfolio, positions } => {
                 self.portfolio = match portfolio {
@@ -477,14 +503,7 @@ impl App {
                     Ok(data) => LoadState::Loaded { data, at: now },
                     Err(e) => LoadState::Error(e),
                 };
-                let n = self
-                    .positions
-                    .data()
-                    .map(|v| v.len())
-                    .unwrap_or(0);
-                if n > 0 && self.positions_sel >= n {
-                    self.positions_sel = n - 1;
-                }
+                self.clamp_selection(Tab::Portfolio);
             }
         }
     }
@@ -519,6 +538,15 @@ pub enum KeyOutcome {
     RefreshAll,
 }
 
+/// Whether a market matches a lowercased search needle (question or category).
+fn market_matches(m: &Market, needle: &str) -> bool {
+    m.question.to_lowercase().contains(needle)
+        || m.category
+            .as_deref()
+            .map(|c| c.to_lowercase().contains(needle))
+            .unwrap_or(false)
+}
+
 fn next_tab(t: Tab) -> Tab {
     Tab::from_index((t.index() + 1) % Tab::ALL.len())
 }
@@ -526,22 +554,9 @@ fn prev_tab(t: Tab) -> Tab {
     Tab::from_index((t.index() + Tab::ALL.len() - 1) % Tab::ALL.len())
 }
 
-/// Format a USD amount with thousands separators.
-pub fn fmt_money(v: f64) -> String {
-    let neg = v < 0.0;
-    let cents = (v.abs() * 100.0).round() as u64;
-    let (whole, frac) = (cents / 100, cents % 100);
-    let digits = whole.to_string();
-    let bytes = digits.as_bytes();
-    let mut grouped = String::new();
-    for (i, b) in bytes.iter().enumerate() {
-        if i > 0 && (bytes.len() - i) % 3 == 0 {
-            grouped.push(',');
-        }
-        grouped.push(*b as char);
-    }
-    format!("{}${}.{:02}", if neg { "-" } else { "" }, grouped, frac)
-}
+// `fmt_money` lives in the shared `predlab-util` crate (also used by the admin
+// TUI). Re-exported here so existing `crate::app::fmt_money` call sites stay put.
+pub use predlab_util::fmt_money;
 
 /// Compact human-readable age ("12s ago", "3m ago").
 pub fn fmt_age(d: Duration) -> String {
@@ -694,6 +709,29 @@ mod tests {
         app.mode = Mode::Command;
         app.handle_key(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL));
         assert!(app.should_quit);
+    }
+
+    #[test]
+    fn fetch_clamps_its_own_tabs_selection_not_the_active_one() {
+        let mut app = App::new(false);
+        // Pretend the user had scrolled deep into a large markets list.
+        app.tab = Tab::Markets;
+        app.markets_sel = 40;
+        // Now they're viewing the (shorter) Leaderboard tab.
+        app.tab = Tab::Leaderboard;
+        app.leaderboard = LoadState::Loaded {
+            data: (0..100)
+                .map(|i| LeaderRow { username: format!("u{i}"), net_worth: i as f64, rank: None })
+                .collect(),
+            at: Instant::now(),
+        };
+        // A background markets refresh lands with only 5 rows while we're on
+        // the leaderboard. markets_sel must be clamped against the 5 markets,
+        // not against the 100-row leaderboard.
+        app.apply_fetch(FetchMsg::Markets(Ok(vec![Market::default(); 5])));
+        assert_eq!(app.markets_sel, 4, "markets_sel clamped to its own length");
+        // The leaderboard selection is untouched by a markets fetch.
+        assert_eq!(app.leaderboard_sel, 0);
     }
 
     #[test]

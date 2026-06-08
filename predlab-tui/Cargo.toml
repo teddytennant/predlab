@@ -11,6 +11,7 @@ name = "predlab-tui"
 path = "src/main.rs"
 
 [dependencies]
+predlab-util = { path = "../predlab-util" }
 ratatui = "0.29"
 crossterm = "0.28"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time"] }
@@ -18,7 +19,3 @@ reqwest = { version = "0.12", default-features = false, features = ["json", "rus
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 anyhow = "1.0"
-
-[profile.release]
-strip = true
-lto = "thin"

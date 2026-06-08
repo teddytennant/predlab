@@ -1,0 +1,11 @@
+[package]
+name = "predlab-util"
+version = "0.1.0"
+edition = "2021"
+description = "Shared formatting helpers for the PredLab Rust tools (admin + member TUIs)"
+authors = ["Teddy Tennant <teddytennant@icloud.com>"]
+license = "MIT"
+
+[lib]
+name = "predlab_util"
+path = "src/lib.rs"
