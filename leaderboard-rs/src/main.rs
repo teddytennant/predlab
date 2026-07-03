@@ -169,7 +169,6 @@ async fn main() -> Result<()> {
     let app = Router::new()
         .route("/", get(index))
         .route("/start", get(start))
-        .route("/tui", get(tui_page))
         .route("/about", get(about_page))
         .route("/markets", get(markets_page))
         .route("/u/:username", get(profile))
@@ -226,9 +225,8 @@ async fn client_py() -> impl IntoResponse {
     )
 }
 
-/// Public JSON ranking — same data the HTML page shows. Consumed by the
-/// terminal client (`predlab-tui`). No PII beyond the usernames already on
-/// the public board, so no auth required. On a sim outage we return 502 (not
+/// Public JSON ranking — same data the HTML page shows. No PII beyond the
+/// usernames already on the public board, so no auth required. On a sim outage we return 502 (not
 /// an empty 200) so clients can tell "no members" from "backend down".
 async fn leaderboard_json(State(st): State<AppState>) -> Response {
     match fetch_leaders(&st).await {
@@ -250,11 +248,6 @@ async fn leaderboard_json(State(st): State<AppState>) -> Response {
         )
             .into_response(),
     }
-}
-
-/// Onboarding page for the terminal client: install / run / vim keys.
-async fn tui_page() -> Html<String> {
-    Html(render_tui_page())
 }
 
 /// Static rules / about page — what the game is and how the score works.
@@ -595,48 +588,8 @@ yes_token = poly.markets(limit=1)[0]["clobTokenIds"][0]
 poly.place_order(token_id=yes_token, side="BUY", price=0.55, size=10)
 print(poly.positions())                          # what you now hold</pre>
 <p class="dim">paper trading only · full step-by-step guide → <a href="https://github.com/teddytennant/predlab#getting-started-members">github.com/teddytennant/predlab</a></p>
-<p class="dim">prefer a terminal? <a href="/tui">→ install the TUI client (predlab-tui)</a></p>
 </section>
 <p class="nav"><a href="/">← back to leaderboard</a></p>"##;
-
-/// Standalone install page for the terminal client. Mirrors the look of
-/// `/start` so members feel like they're still on the same site.
-const TUI_ONBOARD: &str = r##"<section class="onboard">
-<h2><span class="dim">$</span> predlab-tui — paper trading in your shell</h2>
-<p>A vim-flavored TUI clone of this site: leaderboard, markets, and your portfolio in one window. Same data, no browser.</p>
-
-<h2 style="margin-top:18px"><span class="dim">$</span> install (one line)</h2>
-<pre class="snippet">cargo install --git https://github.com/teddytennant/predlab predlab-tui</pre>
-<p class="dim">requires Rust (<a href="https://rustup.rs">rustup.rs</a>). drops the <code>predlab-tui</code> binary onto your PATH.</p>
-
-<h2 style="margin-top:18px"><span class="dim">$</span> run it</h2>
-<pre class="snippet">export POLY_API_KEY=pm_paper_…   # your key (admin issues it)
-predlab-tui</pre>
-<p class="dim">no key? the Leaderboard and Markets tabs still work. ask an admin for one to unlock Portfolio.</p>
-
-<h2 style="margin-top:18px"><span class="dim">$</span> keys (vim)</h2>
-<pre class="snippet">h l   1 2 3 4   switch tab
-j k   gg / G    move selection / jump
-r R             refresh tab / refresh all
-/needle         filter the current list
-:cmd            ex command — try :help, :q
-?               full help screen
-q   Ctrl-c      quit</pre>
-
-<p class="dim">screens:</p>
-<pre class="snippet"><span class="dim">┌─ PREDLAB v0.1.0  ·  paper trading ────────────  ● connected ─┐</span>
-<span class="dim"> </span> 1 <strong>LEADERBOARD</strong>   2 MARKETS    3 PORTFOLIO   4 HELP
-<span class="dim">┌─ LEADERBOARD ────────────────────── 42 members · 12s ago ─┐</span>
-<span class="dim">│</span>  #   MEMBER                        NET WORTH
-<span class="dim">│</span>  ▶ 1 teddy                         $29,444.44 ★
-<span class="dim">│</span>    2 alice                         $26,300.00
-<span class="dim">│</span>    3 bob                           $25,420.10
-<span class="dim">└────────────────────────────────────────────────────────────┘</span>
-<span class="dim"> NORMAL </span> /ali                                ? help  : cmd  q quit</pre>
-
-<p class="dim">runs anywhere with Rust + a 256-color terminal · paper money only</p>
-</section>
-<p class="nav"><a href="/">← back to leaderboard</a>  ·  <a href="/start">→ python client</a></p>"##;
 
 /// Static rules / about copy. Answers the two questions new members always ask:
 /// "is this real money?" and "how is my score calculated?". The net-worth
@@ -701,8 +654,7 @@ fn page_shell(board_inner: &str) -> String {
         "<pre class=\"board\">{board}</pre>\n\
          <p class=\"nav\"><a href=\"/markets\">→ browse markets</a> · \
          <a href=\"/about\">→ rules</a> · \
-         <a href=\"/start\">→ get your key</a> · \
-         <a href=\"/tui\">→ terminal client</a></p>",
+         <a href=\"/start\">→ get your key</a></p>",
         board = board,
     );
     document("predlab · leaderboard", Some(REFRESH_SECS), &body)
@@ -711,11 +663,6 @@ fn page_shell(board_inner: &str) -> String {
 /// The standalone onboarding / download page.
 fn render_start_page() -> String {
     document("predlab · get started", None, ONBOARD)
-}
-
-/// Standalone install page for the terminal client.
-fn render_tui_page() -> String {
-    document("predlab · TUI client", None, TUI_ONBOARD)
 }
 
 /// Aggregate club metrics rendered as a kv block above the board — gives a
@@ -1199,10 +1146,9 @@ mod tests {
     }
 
     #[test]
-    fn leaderboard_links_to_start_and_tui_pages() {
+    fn leaderboard_links_to_start_page() {
         let html = render_page(&[leader("alice", 25000.0)], 25000.0);
         assert!(html.contains(r#"href="/start""#));
-        assert!(html.contains(r#"href="/tui""#));
         assert!(html.contains(r#"href="/markets""#));
         assert!(html.contains(r#"href="/about""#));
         // onboarding itself is NOT on the board page anymore
@@ -1358,32 +1304,6 @@ mod tests {
         assert!(html.contains("predlab member · teddy"));
         assert!(html.contains("boom"));
         assert!(html.contains(r#"href="/""#));
-    }
-
-    // --- TUI install page ---------------------------------------------
-
-    #[test]
-    fn tui_page_has_install_run_and_keys_sections() {
-        let html = render_tui_page();
-        // install command for the terminal client
-        assert!(html.contains("cargo install --git"));
-        assert!(html.contains("predlab-tui"));
-        // run instructions reference the env var
-        assert!(html.contains("POLY_API_KEY"));
-        // vim keys are documented
-        assert!(html.contains("gg") && html.contains(": cmd"));
-        // back-to-leaderboard nav
-        assert!(html.contains(r#"href="/""#));
-        // and a cross-link to the python client onboarding
-        assert!(html.contains(r#"href="/start""#));
-        // no auto-refresh on a static page
-        assert!(!html.contains("http-equiv=\"refresh\""));
-    }
-
-    #[test]
-    fn start_page_links_to_tui_install() {
-        let html = render_start_page();
-        assert!(html.contains(r#"href="/tui""#));
     }
 
     #[test]

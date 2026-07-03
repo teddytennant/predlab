@@ -6,7 +6,7 @@
 
 🏆 **[predlab.teddytennant.com](https://predlab.teddytennant.com)** — live standings, updated automatically.
 
-Nothing to install to just watch. To trade, your admin gives you an API key and you pick one of three clients below.
+Nothing to install to just watch. To trade, your admin gives you an API key and you pick one of the clients below.
 
 ## Install
 
@@ -27,16 +27,6 @@ uv run python -c "from predlab import PolymarketClient; print(PolymarketClient()
 
 Full walkthrough — placing orders, checking your portfolio, curl examples: **[docs/API.md](docs/API.md)**
 
-### Terminal (macOS / Linux)
-
-```bash
-cargo install --git https://github.com/teddytennant/predlab predlab-tui
-export POLY_API_KEY=pm_paper_xxxxxxxx
-predlab-tui
-```
-
-Vim-flavored TUI: leaderboard, markets, and your portfolio in one window. Screenshots and key reference: [predlab.teddytennant.com/tui](https://predlab.teddytennant.com/tui).
-
 ### Desktop GUI (macOS / Linux)
 
 ```bash
@@ -46,7 +36,7 @@ predlab-gui
 
 A first-run wizard walks you through pasting your key. Full setup steps (Rust toolchain, platform deps): **[predlab-gui/INSTALL.md](predlab-gui/INSTALL.md)**
 
-**Windows isn't supported for the GUI or TUI.** If you want them, run Linux in a VM (UTM, VirtualBox, VMware) or dual-boot. If you just want the API, native Windows or WSL both work fine.
+**Windows isn't supported for the GUI.** If you want it, run Linux in a VM (UTM, VirtualBox, VMware) or dual-boot. If you just want the API, native Windows or WSL both work fine.
 
 ## More docs
 

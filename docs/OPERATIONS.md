@@ -49,7 +49,7 @@ point them at `predlab.teddytennant.com/start`. Every member starts with $25,000
 2. **Feature the week's markets.** Tell members which questions you're trading this
    week (there's no in-app "featured" flag yet — see ROADMAP). Link them from the
    markets browser by question.
-3. **Members trade** via `predlab.py`, the TUI, or their own agents.
+3. **Members trade** via `predlab.py` (the `predlab-py` package), the desktop GUI, or their own agents.
 4. **Watch the board** live at `/` (refreshes every 30s) — the P&L column and club
    stats show how the cohort is doing.
 

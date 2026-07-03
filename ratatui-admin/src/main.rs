@@ -21,7 +21,7 @@ use std::io;
 use std::io::Write as _;
 
 use anyhow::{Context, Result};
-// Shared formatting helpers (also used by predlab-tui). The shared `truncate`
+// Shared formatting helpers (also used by predlab-gui). The shared `truncate`
 // is char-boundary-safe, unlike the old byte-slicing copy this replaces.
 use predlab_util::{fmt_money, truncate};
 use crossterm::{

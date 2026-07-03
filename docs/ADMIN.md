@@ -9,7 +9,6 @@ predlab/
 ├── polymarket-sim/   # Polymarket-style Gamma + CLOB mock (Python / FastAPI)  :8001
 ├── leaderboard-rs/   # Public live leaderboard page (Rust / axum)             :8003
 ├── ratatui-admin/    # Admin TUI (Rust): issue keys + manage club roster
-├── predlab-tui/      # Member TUI (Rust): vim leaderboard + markets + portfolio
 ├── predlab-gui/      # Desktop GUI (Rust / egui): trade, portfolio, admin panel
 ├── predlab-py/       # Member starter client (Python, uv-packaged)
 ├── docker-compose.yml
