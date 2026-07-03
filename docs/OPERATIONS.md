@@ -2,10 +2,10 @@
 
 A step-by-step playbook for running the club week to week. Written so a co-officer
 (VP / admin) can run a meeting without the founder present. Everything here uses
-endpoints and TUI actions that already exist.
+endpoints that already exist.
 
 > Admin actions need the master secret (`X-Admin-Secret: $ADMIN_SECRET`) or an
-> `owner`/`admin` API key. The admin TUI (`ratatui-admin`) wraps the common ones.
+> `owner`/`admin` API key.
 
 ## The stack (where things run)
 
@@ -28,15 +28,15 @@ Exposed via Cloudflare Tunnel — no open inbound ports.
 
 ## Onboarding new members
 
-Issue one key per member (admin TUI → **Roster** → add, or the API):
+Issue one key per member:
 
 ```bash
 curl -X POST "localhost:8001/admin/create-paper-key?username=alice&display_name=alice&role=member" \
   -H "X-Admin-Secret: $ADMIN_SECRET"
 ```
 
-Hand each member their `pm_paper_…` key (the TUI's `c` copies a creds block) and
-point them at `predlab.teddytennant.com/start`. Every member starts with $25,000.
+Hand each member their `pm_paper_…` key and point them at
+`predlab.teddytennant.com/start`. Every member starts with $25,000.
 
 > **Onboarding 30+ at once is still one-at-a-time today** — see ROADMAP "bulk key
 > issuance". For now, pre-mint keys before the fair and print the creds blocks.

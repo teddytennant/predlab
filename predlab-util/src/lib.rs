@@ -1,6 +1,5 @@
-//! Small formatting helpers shared by the PredLab Rust front-ends
-//! (`ratatui-admin` and `predlab-gui`). Kept dependency-free so any tool can
-//! pull it in cheaply.
+//! Small formatting helpers for the PredLab Rust front-ends. Kept
+//! dependency-free so any tool can pull it in cheaply.
 
 /// Format a USD amount with thousands separators: `25000.0` → `"$25,000.00"`,
 /// `-42.1` → `"-$42.10"`.

@@ -31,8 +31,8 @@ market-maker** — your order fills only when another member takes the other sid
 |---|---|---|---|
 | `polymarket-sim/` | Python · FastAPI · SQLAlchemy | 8001 | Market sync, order book, paper accounting, admin + auth |
 | `leaderboard-rs/` | Rust · axum | 8003 | Public live leaderboard site + per-member profile pages |
-| `ratatui-admin/` | Rust · ratatui (TUI) | — | Admin console: issue/revoke keys, manage roster, reset balances |
-| `predlab-util/` | Rust (lib) | — | Shared formatting/util crate for the admin TUI and desktop GUI |
+| `predlab-gui/` | Rust · egui | — | Desktop app: trade, portfolio, admin ops in one window |
+| `predlab-util/` | Rust (lib) | — | Shared formatting/util crate for the desktop GUI |
 | `predlab-py/` | Python (uv package) | — | Member starter client (`uv sync`) |
 
 Deployment is a `docker compose` stack (Postgres + sim + leaderboard) on a NixOS host,
@@ -65,7 +65,7 @@ their own frameworks, or no AI at all.
 predlab/
 ├── polymarket-sim/   # FastAPI Gamma + CLOB mock + paper accounting   :8001
 ├── leaderboard-rs/   # Public live leaderboard (axum)                  :8003
-├── ratatui-admin/    # Admin TUI (issue keys, manage roster)
+├── predlab-gui/      # Desktop app (egui): trade, portfolio, admin ops
 ├── predlab-util/     # Shared Rust util crate
 ├── predlab-py/       # Member starter client (Python, uv-packaged)
 ├── docs/             # This overview, review report, club docs, Telegram plan

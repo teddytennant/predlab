@@ -8,7 +8,6 @@ For issuing keys, resetting balances, and resolving markets week-to-week, see th
 predlab/
 ├── polymarket-sim/   # Polymarket-style Gamma + CLOB mock (Python / FastAPI)  :8001
 ├── leaderboard-rs/   # Public live leaderboard page (Rust / axum)             :8003
-├── ratatui-admin/    # Admin TUI (Rust): issue keys + manage club roster
 ├── predlab-gui/      # Desktop GUI (Rust / egui): trade, portfolio, admin panel
 ├── predlab-py/       # Member starter client (Python, uv-packaged)
 ├── docker-compose.yml
@@ -29,21 +28,6 @@ Or run directly for development:
 ```bash
 cd polymarket-sim && pip install -e ".[dev]" && uvicorn polymarket_sim.main:app --port 8001
 ```
-
-## Admin TUI
-
-```bash
-make install-admin     # cargo install --path ratatui-admin  -> `predlab` on PATH
-predlab                # or: make admin
-```
-
-Three tabs (`l`/`h` or Tab to switch):
-
-- **Issue key** — type a username, pick a role with `←/→`, `Enter` mints a paper API key on the sim, saves the member to the local roster (`~/.predlab/students.db`), and copies the credentials block to your clipboard.
-- **Roster** — browse members. `c` copies creds, `r` resets selected balance, `R` resets everyone, `x` removes member (destructive actions require `y` confirm).
-- **Leaderboard** — live ranking by paper net worth (`r` to refresh).
-
-Env vars: `POLY_URL` (default http://localhost:8001), `PREDLAB_ADMIN_SECRET` (for `X-Admin-Secret`).
 
 ## Desktop GUI admin panel
 
@@ -88,7 +72,7 @@ A reset clears orders/positions and returns cash to the starting balance. Remove
 ```bash
 make test          # all suites
 make test-sims     # pytest for the simulator
-make test-admin    # cargo test for the TUI + registry
+make test-gui      # cargo test for the workspace (GUI + util)
 make lint
 ```
 

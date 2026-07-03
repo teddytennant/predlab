@@ -24,7 +24,7 @@ jobs:
       - name: Test
         run: pytest -q
 
-  # All workspace crates (predlab-gui, predlab-util, ratatui-admin) in one job.
+  # All workspace crates (predlab-gui, predlab-util) in one job.
   workspace:
     name: cargo workspace (test + clippy)
     runs-on: ubuntu-latest
