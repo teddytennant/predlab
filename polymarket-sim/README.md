@@ -1,10 +1,8 @@
 # polymarket-sim
 
-Educational **paper trading simulator** that faithfully mimics the public market data (Gamma) and CLOB trading APIs of Polymarket.
+Educational **paper trading simulator** that mimics the public market data (Gamma) and CLOB trading APIs of Polymarket.
 
 Built for the school Prediction Markets Club so students can practice real strategies, write bots, and analyze P&L using live prices — with zero financial risk.
-
-**Status:** Phase 1 (Foundation) complete.
 
 ## Quick Start (Local, no Docker)
 
@@ -27,26 +25,33 @@ curl http://localhost:8001/health
 curl "http://localhost:8001/markets?active=true&limit=5" | python -m json.tool
 ```
 
-The `/markets` endpoint returns **real live data** pulled from the public Polymarket Gamma API on startup.
+`/markets` returns **real live data** pulled from the public Polymarket Gamma API on startup and refreshed by a background sync loop.
 
-## With Docker Compose (recommended for full stack)
+## With Docker Compose
+
+The full club stack (sim + Postgres + leaderboard site) lives in the repo-root
+`docker-compose.yml` — use that for deployments. This directory's
+`docker-compose.yml` brings up just the sim + Postgres for local development:
 
 ```bash
 docker compose up --build
 ```
 
-(Uses Postgres + the app; currently defaults to sqlite inside container until DB_URL updated.)
+## API surface
 
-## Endpoints (Phase 1)
+- **Public market data:** `GET /markets` (filters, offset/limit pagination, `q=` search), `GET /events`
+- **CLOB helpers:** `GET /book`, `POST /books`, `GET /midpoint`, `GET /spread`, `GET /last-trade-price`
+- **Trading (paper, `POLY_API_KEY` header):** `POST /order`, `POST /orders` (batch), `DELETE /order`
+- **Portfolio:** `GET /positions`, `GET /portfolio`, `GET /user/orders`, `GET /data/orders`, `GET /data/trades`
+- **Admin (role-gated):** create/revoke keys, set roles, reset balances, delete users, force-resolve markets, leaderboard
 
-- `GET /health`
-- `GET /markets?active=true&limit=20` — real-shaped live markets
-- `POST /orders` — stub paper order creation (exercises in-memory orderbook)
+Paper keys (`pm_paper_…`) are bearer tokens — no L2/EIP-712 signature is
+verified, so SDKs work with dummy creds. Code written against the sim still
+needs real wallet signing (and real money) to run against the live exchange.
 
-## Next Steps (from approved plan)
+See the repo-root `README.md` for the member guide and `docs/OPERATIONS.md` for
+running the club.
 
-See `FOUNDATION.md` for exactly what was built and the roadmap to Phase 2 (full API fidelity, auth, paper trading engine, WebSockets).
-
-This project follows the exact layout and Python patterns from the Principia AI Homeschool `docs/plans/06-python-backend.md` + the approved Polymarket-sim plan.
+Run the tests with `pytest`.
 
 **NOT AFFILIATED WITH POLYMARKET.** Purely educational.

@@ -1,5 +1,5 @@
 """
-Core paper trading service for polymarket-sim (Phase 2 Fidelity).
+Core paper trading service for polymarket-sim.
 
 Responsibilities:
 - Balance checks + escrow on order placement (buy notional reserved from cash)
@@ -10,8 +10,7 @@ Responsibilities:
 - Resolution settlement via the manual admin force-resolve path
 - Helpers for user queries (open orders, positions with unrealized P&L)
 
-All amounts use float for simplicity in MVP (Numeric in DB but we cast). Production would
-be more careful with Decimal everywhere.
+Amounts are handled as floats (stored as Numeric in the DB and cast on read).
 
 The service is the single source of truth for "what happens to paper money on a fill".
 OrderBook engine only does matching; this service owns the accounting.
@@ -20,13 +19,13 @@ OrderBook engine only does matching; this service owns the accounting.
 from __future__ import annotations
 
 import logging
-from datetime import datetime
 from typing import Any
 
 from sqlalchemy import delete, select, update
 from sqlalchemy.orm import Session
 
 from ..models.db import Market, NetWorthSnapshot, Order, PaperAccount, Position, Trade, User
+from ..util import utcnow
 from .auth import ensure_paper_account
 from .orderbook import (
     OrderBookEntry,
@@ -91,13 +90,20 @@ def _current_price_for_token(db: Session, token_id: str) -> float:
 # ---------------------------------------------------------------------------
 
 
-def _adjust_balance(db: Session, user: User, delta: float, reason: str) -> PaperAccount:
-    """Internal: mutate paper balance. delta positive = credit."""
+def _adjust_balance(
+    db: Session, user: User, delta: float, reason: str, *, allow_negative: bool = False
+) -> PaperAccount:
+    """Internal: mutate paper balance. delta positive = credit.
+
+    ``allow_negative`` is for settlement debits: a losing short owes the payout
+    even if they've already spent the sale proceeds, so their cash may go
+    negative rather than silently forgiving the debt.
+    """
     acct = ensure_paper_account(db, user)
     # Numeric columns load back as Decimal; coerce to float so callers can pass
     # either a Decimal (reloaded order.price/size) or a float without TypeErrors.
     new_bal = float(acct.balance_usd) + float(delta)
-    if new_bal < -1e-9:
+    if new_bal < -1e-9 and not allow_negative:
         raise ValueError(f"Insufficient paper balance for {reason} (would go to {new_bal})")
     acct.balance_usd = new_bal  # type: ignore[assignment]
     logger.info(
@@ -165,16 +171,14 @@ def update_position_on_fill(
         pos.size = new_size
         pos.avg_entry_price = new_avg
     else:  # sell
-        # Let the position go negative — a sell beyond holdings opens a short, which
-        # compute_net_worth marks as a liability at the current price. Clamping to 0
-        # here (the old MVP behaviour) credited the sale proceeds while silently
-        # dropping the shares owed: pure money creation that inflated net worth.
+        # A sell beyond holdings drives size negative: a short, which
+        # compute_net_worth marks as a liability at the current price.
         new_size = old_size - fill_size
         pos.size = 0.0 if abs(new_size) < 1e-9 else new_size
         if pos.size == 0:
             pos.avg_entry_price = None
 
-    pos.updated_at = datetime.utcnow()
+    pos.updated_at = utcnow()
     logger.info(
         "Position updated user=%s token=%s %+.2f@%.4f -> size=%.2f avg=%.4f",
         user.username,
@@ -543,7 +547,9 @@ def compute_net_worth(db: Session, user: User) -> dict[str, float]:
 def leaderboard(db: Session) -> list[dict[str, Any]]:
     """All users ranked by paper net worth, highest first."""
     users = db.execute(select(User)).scalars().all()
-    rows = [{"username": u.username, "role": u.role, **compute_net_worth(db, u)} for u in users]
+    rows: list[dict[str, Any]] = [
+        {"username": u.username, "role": u.role, **compute_net_worth(db, u)} for u in users
+    ]
     rows.sort(key=lambda r: r["net_worth"], reverse=True)
     return rows
 
@@ -735,7 +741,9 @@ def force_resolve_market(db: Session, market_id: str, resolution: str = "yes") -
     """
     Manual admin settlement for teaching.
     resolution: "yes" or "no" (maps to which leg pays 1.0)
-    Credits winners 1.0 per share, losers 0, closes positions, adds to balance.
+    Longs are credited the payout per share; shorts are debited it (they owe the
+    shares), which may drive their cash negative. All positions close at 0.
+    ``total_payout`` in the result is the net cash movement across members.
     """
     market = db.get(Market, market_id)
     if not market:
@@ -752,16 +760,25 @@ def force_resolve_market(db: Session, market_id: str, resolution: str = "yes") -
     settled = 0
     total_payout = 0.0
     for pos in positions:
-        if pos.size <= 0:
+        size = float(pos.size)
+        if abs(size) < 1e-9:
             continue
         # Which leg?
         # Heuristic: first token in market is Yes, second No (common convention)
         token_list = market.clob_token_ids or []
         payout = yes_payout if (not token_list or pos.clob_token_id == token_list[0]) else no_payout
-        proceeds = float(pos.size) * payout
+        # Negative size (a short) makes this a debit: the short sold shares it
+        # never held, so at resolution it owes the payout on each one.
+        proceeds = size * payout
         user = db.get(User, pos.user_id)
         if user:
-            _adjust_balance(db, user, proceeds, f"resolution payout {market_id} {resolution}")
+            _adjust_balance(
+                db,
+                user,
+                proceeds,
+                f"resolution payout {market_id} {resolution}",
+                allow_negative=True,
+            )
         # Close position
         pos.size = 0.0
         pos.avg_entry_price = None

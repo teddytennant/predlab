@@ -20,6 +20,7 @@ from polymarket_sim.services.paper_trading import (
 )
 
 TOKEN_YES = "100"
+TOKEN_NO = "101"
 
 
 def _user(session, name):
@@ -101,8 +102,7 @@ def test_resting_maker_is_settled_on_fill(session, market, starting_balance):
     """Both sides of a cross must settle — not just the incoming taker.
 
     Before the fix the resting maker was credited nothing and its order stayed
-    'open' forever. Now it is paid the fill proceeds and marked filled. (Position
-    still clamps at 0 under the current no-shorts MVP.)
+    'open' forever. Now it is paid the fill proceeds and marked filled.
     """
     maker = _user(session, "maker")
     taker = _user(session, "taker")
@@ -313,3 +313,58 @@ def test_force_resolve_yes_pays_winning_holders_one_dollar_per_share(session, ma
     # Market is closed afterwards.
     session.refresh(market)
     assert market.closed is True and market.active is False
+
+
+def test_force_resolve_no_pays_the_no_leg(session, market, starting_balance):
+    """The No leg pays $1/share when the market resolves 'no'."""
+    alice = _user(session, "alice")
+    update_position_on_fill(session, alice, market, TOKEN_NO, 100, 0.30, "buy")
+    session.commit()
+
+    force_resolve_market(session, market.id, resolution="no")
+    assert _balance(session, alice) == pytest.approx(starting_balance + 100.0)
+    pos = get_or_create_position(session, alice, market, TOKEN_NO)
+    assert float(pos.size) == pytest.approx(0.0)
+
+
+def test_force_resolve_debits_short_the_full_payout(session, market, starting_balance):
+    """A short on the winning leg owes $1/share at settlement.
+
+    Regression: settlement used to skip negative positions, so a naked seller
+    kept the sale proceeds and its liability vanished — minting paper money at
+    resolution. Cash across both parties must be conserved.
+    """
+    maker = _user(session, "maker")
+    taker = _user(session, "taker")
+    # Maker sells 10 Yes it doesn't hold at 0.30; taker crosses -> maker short 10.
+    place_paper_order(session, maker, market.id, TOKEN_YES, side="sell", price=0.30, size=10)
+    place_paper_order(session, taker, market.id, TOKEN_YES, side="buy", price=0.50, size=10)
+
+    result = force_resolve_market(session, market.id, resolution="yes")
+    assert result["positions_settled"] == 2
+    # Maker: +$3 sale proceeds, -$10 owed on the short = starting - 7.
+    assert _balance(session, maker) == pytest.approx(starting_balance - 7.0)
+    # Taker: paid $3 for 10 shares that pay $10 = starting + 7.
+    assert _balance(session, taker) == pytest.approx(starting_balance + 7.0)
+    # Zero-sum: settlement moved cash between members without minting any.
+    assert _balance(session, maker) + _balance(session, taker) == pytest.approx(
+        2 * starting_balance
+    )
+    pos = get_or_create_position(session, maker, market, TOKEN_YES)
+    assert float(pos.size) == pytest.approx(0.0)
+
+
+def test_force_resolve_short_on_losing_leg_owes_nothing(session, market, starting_balance):
+    """A short on the losing leg keeps the sale proceeds and owes nothing."""
+    maker = _user(session, "maker")
+    taker = _user(session, "taker")
+    place_paper_order(session, maker, market.id, TOKEN_YES, side="sell", price=0.30, size=10)
+    place_paper_order(session, taker, market.id, TOKEN_YES, side="buy", price=0.50, size=10)
+
+    force_resolve_market(session, market.id, resolution="no")
+    # Maker keeps the $3; the shorted Yes shares expired worthless.
+    assert _balance(session, maker) == pytest.approx(starting_balance + 3.0)
+    # Taker's 10 Yes shares pay nothing.
+    assert _balance(session, taker) == pytest.approx(starting_balance - 3.0)
+    pos = get_or_create_position(session, maker, market, TOKEN_YES)
+    assert float(pos.size) == pytest.approx(0.0)

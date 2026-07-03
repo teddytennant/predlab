@@ -1,7 +1,7 @@
 """
 SQLAlchemy 2.0 ORM models for the Polymarket paper trading simulator.
 
-Models (as specified in foundation phase):
+Models:
 - User: human / bot identity (username for leaderboard)
 - ApiKey: long-lived keys issued by admin (hashed secret)
 - PaperAccount: one per user, holds virtual USD balance
@@ -9,8 +9,9 @@ Models (as specified in foundation phase):
 - Order: paper limit/market orders placed against the sim
 - Trade: fills / executions
 - Position: current holdings per outcome token for a user
+- NetWorthSnapshot: points on each user's net-worth-over-time curve
 
-All timestamps use timezone-aware UTC.
+Timestamps are stored as naive UTC.
 """
 
 from __future__ import annotations
@@ -33,11 +34,6 @@ from sqlalchemy import (
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from ..db import Base
-
-
-def utcnow() -> datetime:
-    """Timezone-aware UTC now (for server_default)."""
-    return datetime.utcnow().replace(tzinfo=None)  # store naive UTC, or use timezone later
 
 
 class User(Base):
@@ -71,7 +67,7 @@ class ApiKey(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
-    key_prefix: Mapped[str] = mapped_column(String(32), nullable=False)  # e.g. "pm_live_xxxx"
+    key_prefix: Mapped[str] = mapped_column(String(32), nullable=False)  # e.g. "pm_paper_xxxx"
     secret_hash: Mapped[str] = mapped_column(String(128), nullable=False)  # store only hash
     label: Mapped[str | None] = mapped_column(String(128))
     created_at: Mapped[datetime] = mapped_column(
@@ -143,7 +139,6 @@ class Market(Base):
         DateTime, server_default=func.now(), nullable=False
     )
 
-    # Relationships for future paper orders etc.
     orders: Mapped[list[Order]] = relationship(back_populates="market")
 
     __table_args__ = (Index("ix_markets_active_closed", "active", "closed"),)

@@ -1,8 +1,5 @@
-# Docker Compose for polymarket-sim (Phase 1 foundation)
-# Brings up the Python API + Postgres (recommended) + Redis (future)
-# For quick local dev without Docker: use sqlite + `uvicorn`
-
-version: "3.9"
+# Local-dev stack: just the sim + Postgres.
+# The full club deployment (sim + leaderboard site) is the repo-root docker-compose.yml.
 
 services:
   db:
@@ -21,12 +18,6 @@ services:
       timeout: 5s
       retries: 5
 
-  redis:
-    image: redis:7-alpine
-    ports:
-      - "6379:6379"
-    # healthcheck omitted for minimal Phase 1
-
   api:
     build: .
     depends_on:
@@ -35,16 +26,15 @@ services:
     ports:
       - "8001:8001"
     environment:
-      - DATABASE_URL=postgresql+psycopg://polymarket:polymarket@db:5432/polymarket_sim
+      - DATABASE_URL=postgresql+psycopg2://polymarket:polymarket@db:5432/polymarket_sim
       - ENVIRONMENT=development
       - SYNC_INTERVAL_SECONDS=30
       # Override in .env for local tweaks
     volumes:
-      - .:/app  # dev: live reload (comment for prod)
+      - .:/app  # dev: live reload
     command: >
       sh -c "pip install -e '.[dev]' --quiet &&
              uvicorn polymarket_sim.main:app --host 0.0.0.0 --port 8001 --reload"
-    # In real prod: use prebuilt image + no volume + non-root
 
 volumes:
   pgdata:

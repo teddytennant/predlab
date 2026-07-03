@@ -6,16 +6,12 @@ on:
   pull_request:
 
 jobs:
-  simulators:
-    name: ${{ matrix.sim }} (pytest + ruff)
+  sim:
+    name: polymarket-sim (pytest + ruff)
     runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        sim: [polymarket-sim]
     defaults:
       run:
-        working-directory: ${{ matrix.sim }}
+        working-directory: polymarket-sim
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -28,34 +24,13 @@ jobs:
       - name: Test
         run: pytest -q
 
-  admin:
-    name: ratatui-admin (cargo test)
+  # All workspace crates (predlab-gui, predlab-util, ratatui-admin) in one job.
+  workspace:
+    name: cargo workspace (test + clippy)
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: ratatui-admin
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: clippy
-      - uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: ratatui-admin
-      - name: Test
-        run: cargo test
-      - name: Clippy
-        run: cargo clippy -- -D warnings
-
-  gui:
-    name: predlab-gui (cargo test)
-    runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: predlab-gui
-    steps:
-      - uses: actions/checkout@v4
-      - name: Install eframe build deps
+      - name: Install eframe build deps (predlab-gui)
         run: |
           sudo apt-get update
           sudo apt-get install -y libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev libxkbcommon-dev libssl-dev
@@ -64,9 +39,9 @@ jobs:
           components: clippy
       - uses: Swatinem/rust-cache@v2
       - name: Test
-        run: cargo test
+        run: cargo test --workspace
       - name: Clippy
-        run: cargo clippy -- -D warnings
+        run: cargo clippy --workspace -- -D warnings
 
   leaderboard:
     name: leaderboard-rs (cargo test)

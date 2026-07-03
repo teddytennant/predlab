@@ -1,10 +1,9 @@
 #!/usr/bin/env python
 """
-Seed script for demo paper users + API keys (Phase 2).
+Seed script for demo paper users + API keys.
 
 Usage (from repo root, after pip install -e .[dev]):
     python scripts/seed_demo_users.py --username alice_quant --display "Alice Quant"
-    # or with admin secret if required in future
 
 Prints the paper API key (use as POLY_API_KEY) and the one-time secret.
 """

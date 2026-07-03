@@ -431,8 +431,7 @@ enum Align {
 /// alignment; `html` is what we actually emit (already HTML-escaped). For most
 /// cells the two carry the same text, but the leaderboard's member column keeps
 /// the bare username in `visible` while `html` holds an `<a>` link — so the
-/// link can't throw off padding and we never have to string-replace a rendered
-/// table (which used to mislink numeric/duplicate usernames).
+/// link markup can't throw off padding.
 struct Cell {
     visible: String,
     html: String,
@@ -706,9 +705,6 @@ fn render_page(rows: &[Leader], start_balance: f64) -> String {
     if rows.is_empty() {
         return page_shell(&esc("  (no members yet — check back once keys are issued)"));
     }
-    // Each row's MEMBER cell carries the bare (truncated) username for width but
-    // an `<a>` link for output — so numeric or duplicate-prefix usernames can no
-    // longer collide with rank/money digits the way a flat string-replace did.
     let cells: Vec<Vec<Cell>> = rows
         .iter()
         .enumerate()

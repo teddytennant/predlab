@@ -1,11 +1,9 @@
 """
-Simple in-memory order book (Phase 1 foundation).
+Simple in-memory order book: one book per outcome token (clob_token_id),
+price-time priority matching for limit orders.
 
-Dataclass-based per-market (keyed by clob_token_id or market+token).
-Basic price-time priority matching for limit orders only.
-Later: move to Redis + more sophisticated engine (IOC, post-only, fees, self-trade prevention).
-
-This is the core of the paper trading CLOB simulator.
+This is the matching core of the paper trading CLOB simulator; all cash and
+position accounting lives in the paper_trading service.
 """
 
 from __future__ import annotations
@@ -13,6 +11,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
+
+from ..util import utcnow
 
 
 @dataclass
@@ -24,7 +24,7 @@ class OrderBookEntry:
     price: float
     size: float  # remaining
     side: str  # "buy" or "sell"
-    created_at: datetime = field(default_factory=datetime.utcnow)
+    created_at: datetime = field(default_factory=utcnow)
 
 
 @dataclass
@@ -113,7 +113,7 @@ class OrderBook:
         }
 
 
-# Global in-memory books (keyed by token id). Phase 1 only — later Redis.
+# Global in-memory books (keyed by token id).
 _order_books: dict[str, OrderBook] = {}
 
 
@@ -121,6 +121,20 @@ def get_orderbook(token_id: str) -> OrderBook:
     if token_id not in _order_books:
         _order_books[token_id] = OrderBook(token_id=token_id)
     return _order_books[token_id]
+
+
+def restore_resting_order(token_id: str, entry: OrderBookEntry) -> None:
+    """Re-insert a persisted open order as a resting entry (startup hydration).
+
+    No matching is attempted — this rebuilds the in-memory books from DB rows
+    after a restart, and those orders already had their chance to cross.
+    """
+    book = get_orderbook(token_id)
+    if entry.side == "buy":
+        book.bids.append(entry)
+    else:
+        book.asks.append(entry)
+    book._sort()
 
 
 def reset_orderbook(token_id: str | None = None) -> None:

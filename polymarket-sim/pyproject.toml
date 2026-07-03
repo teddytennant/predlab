@@ -1,6 +1,6 @@
 [project]
 name = "polymarket-sim"
-version = "0.1.0"
+version = "0.2.0"
 description = "Polymarket API simulator for educational paper trading in Prediction Markets Club"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -61,10 +61,7 @@ warn_unused_ignores = true
 show_error_codes = true
 
 [[tool.mypy.overrides]]
-module = [
-    "aiosqlite.*",
-    "sqlalchemy.*",
-]
+module = ["sqlalchemy.*"]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]

@@ -1,9 +1,7 @@
 """
-SQLAlchemy 2.0 database setup.
+SQLAlchemy 2.0 database setup: sync engine + session (works with SQLite and Postgres).
 
-Uses sync engine + session for foundation phase (simple & reliable with SQLite).
-Provides get_session dependency and init_db() for table creation.
-Later can be upgraded to async with asyncpg + PostgreSQL.
+Provides the get_session dependency and init_db() for table creation.
 """
 
 from __future__ import annotations

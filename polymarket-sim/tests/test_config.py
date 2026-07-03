@@ -10,7 +10,13 @@ from polymarket_sim.config import Settings
 
 @pytest.mark.parametrize(
     "placeholder",
-    ["", "change-me-in-prod-for-club", "change-me-set-in-dotenv"],
+    [
+        "",
+        "change-me-in-prod-for-club",
+        "change-me-in-prod-for-club-use-only",
+        "change-me-set-in-dotenv",
+        "change-me-generate-with-openssl-rand-hex-32",
+    ],
 )
 def test_production_rejects_placeholder_admin_secret(placeholder):
     with pytest.raises(ValidationError, match="ADMIN_SECRET"):

@@ -8,5 +8,3 @@
 - **Author Identity:** Always author commits as the current user. Do not use a separate identity for the agent.
 - **No Co-Auth:** Do NOT add "Co-authored-by: Claude" or similar trailers to commit messages.
 - **Persona:** Act as the user when performing git operations.
-
-Future domain name will be principia-ai.org

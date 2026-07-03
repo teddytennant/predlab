@@ -1,22 +1,14 @@
 """
-Authentication service for the Polymarket paper trading simulator (Phase 2).
+Authentication service for the Polymarket paper trading simulator.
 
-- API key validation using the ApiKey model (key_prefix lookup).
-- Paper-mode bypass: for keys with "pm_paper_" prefix (issued by us), we accept the
-  POLY_API_KEY header value directly without requiring valid L2 HMAC signature.
-  This allows official py-clob-client (or raw httpx) to target the sim with a
-  generated paper key + dummy creds (sig is ignored on server for paper keys).
-- Real L2 sig verification can be added later behind a flag (would require storing
-  plaintext secret or re-deriving).
-- Admin secret gate for privileged endpoints (reset, force-resolve).
-- Dependency helpers for FastAPI routes: get_current_user, require_admin.
+- API keys are bearer tokens: the key string is looked up in the ApiKey table
+  (key_prefix column) and must be active. No L2/HMAC signature is verified —
+  official py-clob-client works against the sim with a paper key + dummy creds.
+- Role hierarchy (member < admin < owner) gates the /admin endpoints; the
+  master X-Admin-Secret authenticates as owner (bootstrap / break-glass).
 
-Headers supported for compatibility:
-- POLY_API_KEY (primary, from clob-client L2)
-- Authorization: Bearer <key>
-- Fallback: X-API-Key
-
-All paper keys are issued with prefix "pm_paper_..." so they are easily identified.
+Headers accepted, in priority order: POLY_API_KEY, Authorization: Bearer,
+X-API-Key. All paper keys are issued with the "pm_paper_" prefix.
 """
 
 from __future__ import annotations
@@ -34,6 +26,7 @@ from sqlalchemy.orm import Session
 from ..config import get_settings
 from ..db import get_session
 from ..models.db import ApiKey, PaperAccount, User
+from ..util import utcnow
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
@@ -57,15 +50,11 @@ def generate_paper_api_key() -> tuple[str, str, str]:
     return prefix, secret, secret_hash
 
 
-def validate_paper_api_key(
-    db: Session,
-    api_key: str,
-    passphrase: str | None = None,  # accepted for compat but ignored for paper
-) -> User | None:
-    """
-    Validate an incoming API key (from POLY_API_KEY header etc).
-    For paper-prefixed keys: just presence check (bypass signature verification).
-    Returns the owning User or None.
+def validate_paper_api_key(db: Session, api_key: str) -> User | None:
+    """Look up an incoming API key and return the owning User, or None.
+
+    The key is a bearer token: possession of an active key row is the whole
+    check. The stored secret_hash is never verified against a signature.
     """
     if not api_key:
         return None
@@ -76,24 +65,10 @@ def validate_paper_api_key(
         logger.warning("Unknown or inactive API key prefix attempted: %s...", api_key[:12])
         return None
 
-    # For paper keys we deliberately skip secret/signature check.
-    # (In real mode we would verify HMAC using stored hash + provided timestamp/sig.)
-    if api_key.startswith("pm_paper_"):
-        logger.info("Paper key authenticated for user_id=%s", api_key_row.user_id)
-    else:
-        # Placeholder: in future full L2 mode we would validate here using secret_hash
-        logger.info(
-            "Non-paper key seen (future full sig validation) user_id=%s", api_key_row.user_id
-        )
-
-    # Touch last_used
-    from datetime import datetime
-
-    api_key_row.last_used_at = datetime.utcnow()
+    api_key_row.last_used_at = utcnow()
     db.commit()
 
-    user = db.get(User, api_key_row.user_id)
-    return user
+    return db.get(User, api_key_row.user_id)
 
 
 def get_api_key_from_headers(
@@ -179,21 +154,6 @@ def require_role(min_role: str) -> Callable[..., Principal]:
         return principal
 
     return _dep
-
-
-def require_admin(
-    x_admin_secret: str | None = Header(default=None, alias="X-Admin-Secret"),
-    api_key: str | None = Depends(get_api_key_from_headers),
-    session: Session = Depends(get_session),
-) -> Principal:
-    """Back-compat dependency: require ≥ admin (an admin/owner key or the master secret)."""
-    principal = _resolve_principal(session, x_admin_secret, api_key)
-    if principal.rank < ROLE_RANK["admin"]:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="requires admin role (an admin key or the X-Admin-Secret)",
-        )
-    return principal
 
 
 def ensure_paper_account(db: Session, user: User) -> PaperAccount:

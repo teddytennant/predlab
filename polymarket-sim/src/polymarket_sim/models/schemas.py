@@ -1,7 +1,6 @@
 """
 Pydantic schemas (request/response models) for the Polymarket simulator API.
 
-Phase 1: minimal set used by the exposed endpoints.
 Real Polymarket shapes are approximated for /markets so existing clients see familiar data.
 """
 
@@ -12,7 +11,7 @@ from pydantic import BaseModel, Field
 
 class HealthResponse(BaseModel):
     status: str = "ok"
-    version: str = "0.1.0"
+    version: str
     environment: str
 
 
@@ -38,51 +37,7 @@ class MarketOut(BaseModel):
     model_config = {"populate_by_name": True, "from_attributes": True}
 
 
-class OrderCreate(BaseModel):
-    """Stub request body for POST /orders (Phase 1)."""
-
-    market_id: str
-    side: str = Field(pattern="^(buy|sell)$")
-    price: float | None = None  # None => market order (stub)
-    size: float = Field(gt=0)
-    clob_token_id: str | None = None
-
-
-class OrderOut(BaseModel):
-    id: int
-    market_id: str
-    side: str
-    price: float | None
-    size: float
-    filled_size: float
-    status: str
-    created_at: datetime
-
-    model_config = {"from_attributes": True}
-
-
 # CLOB-compatible response shapes (for py-clob-client / SDK drop-in)
-class OrderBookLevel(BaseModel):
-    price: str
-    size: str
-
-
-class OrderBookOut(BaseModel):
-    """Shape returned by GET /book (and /books batch)."""
-
-    bids: list[OrderBookLevel]
-    asks: list[OrderBookLevel]
-    # Optional fields for extra fidelity
-    market: str | None = None
-    asset_id: str | None = None
-    timestamp: str | None = None
-    hash: str | None = None
-
-
-class PriceOut(BaseModel):
-    price: str | None = None  # used by /price, /midpoint etc.
-
-
 class MidpointOut(BaseModel):
     midpoint: str
 

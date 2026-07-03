@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import json
 import logging
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any
 
 from sqlalchemy import select
@@ -19,6 +19,7 @@ from sqlalchemy.orm import Session
 from ..clients.gamma import GammaClient
 from ..config import settings
 from ..models.db import Market
+from ..util import utcnow
 
 logger = logging.getLogger(__name__)
 
@@ -129,9 +130,11 @@ async def sync_markets_from_gamma(db: Session, *, max_markets: int | None = None
             if not s:
                 return None
             try:
-                # Strip Z and parse
-                s = s.replace("Z", "+00:00")
-                return datetime.fromisoformat(s.replace("Z", "")).replace(tzinfo=None)
+                parsed = datetime.fromisoformat(s.replace("Z", "+00:00"))
+                if parsed.tzinfo is not None:
+                    # Normalise any offset to UTC before storing naive.
+                    parsed = parsed.astimezone(UTC).replace(tzinfo=None)
+                return parsed
             except Exception:
                 return None
 
@@ -141,7 +144,7 @@ async def sync_markets_from_gamma(db: Session, *, max_markets: int | None = None
         # Upsert
         existing = db.execute(select(Market).where(Market.id == market_id)).scalar_one_or_none()
 
-        now = datetime.utcnow()
+        now = utcnow()
         if existing:
             existing.condition_id = condition_id or existing.condition_id
             existing.question = question

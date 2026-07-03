@@ -1,15 +1,13 @@
 """
-FastAPI application factory for the Polymarket API Simulator (Phase 2 Fidelity).
+FastAPI application factory for the Polymarket API Simulator.
 
-- Full P0/P1 CLOB surface for SDK compatibility: /book, /midpoint, /spread, /last-trade-price,
+- CLOB surface for SDK compatibility: /book, /midpoint, /spread, /last-trade-price,
   POST /order + /orders, DELETE /order, user data paths (/data/orders, /data/trades)
 - Paper trading engine: auth via paper API keys (POLY_API_KEY header), balance escrow,
   position updates, mark-to-market P&L, manual admin force-resolve settlement
 - GET /markets (filters + offset/limit pagination + question search), /events (markets feed)
-- All responses shaped for drop-in use by py-clob-client-v2 and raw httpx
-- Admin ops gated by X-Admin-Secret (reset, force resolve)
-
-See PHASE2.md for verification commands and paper money model.
+- Responses shaped for drop-in use by py-clob-client-v2 and raw httpx
+- Admin ops gated by role (admin/owner paper keys or the X-Admin-Secret header)
 
 Run with:
     uvicorn polymarket_sim.main:app --reload --port 8001
@@ -21,7 +19,6 @@ import asyncio
 import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager, suppress
-from datetime import datetime
 from typing import Any
 
 from fastapi import Depends, FastAPI, HTTPException, Request
@@ -29,6 +26,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from . import __version__
 from .config import get_settings
 from .db import get_session, init_db
 from .models.db import Market, Order, User
@@ -37,8 +35,6 @@ from .models.schemas import (
     LastTradePriceOut,
     MarketOut,
     MidpointOut,
-    OrderCreate,
-    OrderOut,
     PortfolioOut,
     PositionWithPnLOut,
     PostOrderResponse,
@@ -53,7 +49,7 @@ from .services.auth import (
     get_current_user,
     require_role,
 )
-from .services.orderbook import OrderBookEntry, get_orderbook
+from .services.orderbook import OrderBookEntry, get_orderbook, restore_resting_order
 from .services.paper_trading import (
     cancel_paper_order,
     compute_net_worth,
@@ -69,6 +65,7 @@ from .services.paper_trading import (
     reset_user_to_starting,
 )
 from .services.sync import sync_markets_from_gamma
+from .util import utcnow
 
 # Logging
 logging.basicConfig(
@@ -79,15 +76,14 @@ logger = logging.getLogger("polymarket_sim")
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-    """Startup / shutdown lifecycle (Phase 2)."""
+    """Startup / shutdown lifecycle."""
     settings = get_settings()
     logger.info("Starting polymarket-sim in %s mode", settings.environment)
 
-    # 1. Ensure DB tables exist
     init_db()
 
-    # 2. Quick startup sync of the most-liquid slice so /markets has fresh data
-    #    immediately; the background loop below pulls the full catalog after.
+    # Quick startup sync of the most-liquid slice so /markets has fresh data
+    # immediately; the background loop below pulls the full catalog after.
     from .db import SessionLocal
 
     db = SessionLocal()
@@ -96,15 +92,14 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         count = await sync_markets_from_gamma(db, max_markets=startup_cap)
         logger.info("Initial market sync complete: %d markets loaded", count)
 
-        # 3. Hydrate in-memory orderbooks from any open DB orders (survive restart)
+        # Rebuild in-memory orderbooks from open DB orders so they survive restarts.
         _hydrate_orderbooks_from_db(db)
         logger.info("Orderbooks hydrated from persisted open orders")
 
-        # 4. Seed a net-worth snapshot per user so each profile graph has a starting point.
+        # Seed a net-worth snapshot per user so each profile graph has a starting point.
         snap_count = record_all_snapshots(db)
         logger.info("Startup snapshot recorded for %d users", snap_count)
 
-        # 5. Optional: in dev, ensure at least one demo paper user exists
         if settings.is_dev:
             _ensure_dev_demo_user(db)
     except Exception as exc:
@@ -112,7 +107,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     finally:
         db.close()
 
-    # 5. Background loop keeps the full liquid catalog fresh without blocking startup.
+    # Background loop keeps the full liquid catalog fresh without blocking startup.
     sync_task = asyncio.create_task(_periodic_market_sync())
 
     try:
@@ -153,34 +148,21 @@ async def _periodic_market_sync() -> None:
 
 
 def _hydrate_orderbooks_from_db(db: Session) -> None:
-    """Load open/partial paper orders into the global in-memory books (best-effort for restart)."""
+    """Load open/partial paper orders into the global in-memory books after a restart."""
     open_orders = (
         db.execute(select(Order).where(Order.status.in_(["open", "partial"]))).scalars().all()
     )
     for o in open_orders:
         if not o.clob_token_id:
             continue
-        book = get_orderbook(o.clob_token_id)
         entry = OrderBookEntry(
             id=o.id,
             user_id=o.user_id,
-            price=o.price or 0.5,
-            size=max(0.0, o.size - o.filled_size),
+            price=float(o.price) if o.price is not None else 0.5,
+            size=max(0.0, float(o.size) - float(o.filled_size)),
             side=o.side,
         )
-        if o.side == "buy":
-            book.bids.append(entry)
-        else:
-            book.asks.append(entry)
-    # Re-sort any books that received entries (access private registry safely)
-    try:
-        from .services import orderbook as _ob_mod
-
-        _order_books = getattr(_ob_mod, "_order_books", {})
-        for b in _order_books.values():
-            b._sort()
-    except Exception:
-        pass  # non-fatal; books will work for new orders
+        restore_resting_order(o.clob_token_id, entry)
 
 
 def _ensure_dev_demo_user(db: Session) -> None:
@@ -191,7 +173,7 @@ def _ensure_dev_demo_user(db: Session) -> None:
     if demo:
         return
     try:
-        user, key, secret = create_demo_user_with_key(db, "demo_trader", "Demo Trader (Phase 2)")
+        user, key, secret = create_demo_user_with_key(db, "demo_trader", "Demo Trader")
         logger.warning(
             "DEV DEMO USER CREATED — username=demo_trader paper_key=%s secret=%s (store secret securely)",
             key,
@@ -202,7 +184,7 @@ def _ensure_dev_demo_user(db: Session) -> None:
 
 
 def create_app() -> FastAPI:
-    """Application factory (Phase 2 Fidelity)."""
+    """Application factory."""
     settings = get_settings()
 
     app = FastAPI(
@@ -210,10 +192,10 @@ def create_app() -> FastAPI:
         description=(
             "Educational paper-trading clone of Polymarket's public + CLOB APIs. "
             "Live market data synced from Gamma. All trading uses paper money only. "
-            "100% shape-compatible for existing SDKs / py-clob-client. "
+            "Shape-compatible with existing SDKs / py-clob-client. "
             "NOT AFFILIATED WITH POLYMARKET."
         ),
-        version="0.2.0-phase2",
+        version=__version__,
         lifespan=lifespan,
     )
 
@@ -231,10 +213,10 @@ def create_app() -> FastAPI:
     # ------------------------------------------------------------------
     @app.get("/health", response_model=HealthResponse, tags=["system"])
     async def health() -> HealthResponse:
-        return HealthResponse(status="ok", environment=settings.environment)
+        return HealthResponse(status="ok", version=__version__, environment=settings.environment)
 
     # ------------------------------------------------------------------
-    # Public market data (Gamma fidelity + filters + pagination stub)
+    # Public market data (Gamma shape + filters + pagination)
     # ------------------------------------------------------------------
     @app.get("/markets", response_model=list[MarketOut], tags=["markets"])
     async def list_markets(
@@ -311,26 +293,25 @@ def create_app() -> FastAPI:
     # CLOB public helpers (exact paths used by py-clob-client-v2)
     # ------------------------------------------------------------------
     def _book_snapshot(token_id: str) -> dict[str, Any]:
-        """Return CLOB-shaped book. Uses live paper depth + falls back to market data for display."""
+        """Return the CLOB-shaped book. Depth comes from resting paper orders only,
+        so a token nobody has quoted returns empty bids/asks."""
         book = get_orderbook(token_id)
         snap = book.snapshot()
 
         bids = [{"price": str(e["price"]), "size": str(e["size"])} for e in snap.get("bids", [])]
         asks = [{"price": str(e["price"]), "size": str(e["size"])} for e in snap.get("asks", [])]
 
-        # Real depth is always from paper orders only. Synthetic display can be added later from market.
         return {
             "bids": bids,
             "asks": asks,
             "asset_id": token_id,
-            "timestamp": datetime.utcnow().isoformat() + "Z",
+            "timestamp": utcnow().isoformat() + "Z",
         }
 
     @app.get("/book", tags=["clob"])
-    async def get_book(token_id: str, session: Session = Depends(get_session)) -> dict[str, Any]:
+    async def get_book(token_id: str) -> dict[str, Any]:
         """GET /book?token_id=... — real Polymarket shape for SDKs."""
-        data = _book_snapshot(token_id)
-        return data
+        return _book_snapshot(token_id)
 
     @app.post("/books", tags=["clob"])
     async def get_books(payload: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -384,21 +365,14 @@ def create_app() -> FastAPI:
             body = await request.json()
         except Exception:
             body = {}
-        # Normalize common fields from real clob payload or our simple
+        # Normalize field names across real clob payloads and our simple shape.
         token_id = (
             body.get("tokenId")
             or body.get("token_id")
             or body.get("asset_id")
             or body.get("clob_token_id")
         )
-        side_raw = (body.get("side") or "").upper()
-        side = (
-            "buy"
-            if side_raw in ("BUY", "buy")
-            else "sell"
-            if side_raw in ("SELL", "sell")
-            else "buy"
-        )
+        side = "sell" if (body.get("side") or "").upper() == "SELL" else "buy"
         price = body.get("price")
         if price is not None:
             try:
@@ -409,7 +383,7 @@ def create_app() -> FastAPI:
         try:
             size = float(size)
         except Exception:
-            size = 0.1
+            size = 0  # unparseable size -> rejected as a bad payload by the caller
         market_id = body.get("market") or body.get("market_id")
         return {
             "token_id": str(token_id) if token_id else None,
@@ -765,43 +739,6 @@ def create_app() -> FastAPI:
         if detail is None:
             raise HTTPException(404, "user not found")
         return detail
-
-    # Legacy stub kept for Phase 1 scripts
-    @app.post("/orders", response_model=OrderOut, status_code=201, tags=["trading", "legacy"])
-    async def legacy_create_order(
-        body: OrderCreate,
-        session: Session = Depends(get_session),
-    ) -> OrderOut:
-        """Legacy Phase-1 style (no auth). For quick tests only."""
-        # Use demo user if present, else first user
-        demo = session.execute(
-            select(User).where(User.username == "demo_trader")
-        ).scalar_one_or_none()
-        user_id = demo.id if demo else 1
-        market = session.get(Market, body.market_id)
-        if not market:
-            raise HTTPException(404, "Market not found")
-        token = body.clob_token_id or (market.clob_token_ids[0] if market.clob_token_ids else "0")
-        effective_user: User = demo or session.get(User, user_id) or session.get(User, 1)  # type: ignore[assignment]
-        order = place_paper_order(
-            session,
-            effective_user,
-            body.market_id,
-            token,
-            body.side,
-            body.price,
-            body.size,
-        )
-        return OrderOut(
-            id=order.id,
-            market_id=order.market_id,
-            side=order.side,
-            price=order.price,
-            size=order.size,
-            filled_size=order.filled_size,
-            status=order.status,
-            created_at=order.created_at,
-        )
 
     return app
 
