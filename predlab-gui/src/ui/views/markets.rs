@@ -273,11 +273,18 @@ fn detail_pane(app: &mut App, ui: &mut Ui, snap: &Snapshot) {
                 sel.outcome_name()
             );
             if ui.button("Trade this market").clicked() {
+                // The paper book is usually empty (no synthetic depth), so
+                // fall back to the market's midpoint quote before giving up.
                 let price = snap
                     .selected_book
                     .as_ref()
                     .and_then(|b| b.asks.first())
                     .map(|ask| ask.price)
+                    .or_else(|| {
+                        snap.selected_quotes
+                            .as_ref()
+                            .and_then(|q| q.midpoint.parse::<f64>().ok())
+                    })
                     .unwrap_or(app.trade.price);
                 let size = app.trade.size;
                 app.trade

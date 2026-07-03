@@ -345,12 +345,17 @@ def create_app() -> FastAPI:
     @app.get("/midpoint", response_model=MidpointOut, tags=["clob"])
     async def get_midpoint(token_id: str, session: Session = Depends(get_session)) -> MidpointOut:
         m = _find_market_for_token(session, token_id)
-        mid = "0.5"
+        mid = 0.5
         if m and m.best_bid is not None and m.best_ask is not None:
-            mid = str(round((float(m.best_bid) + float(m.best_ask)) / 2, 6))
+            mid = (float(m.best_bid) + float(m.best_ask)) / 2
         elif m and m.last_trade_price is not None:
-            mid = str(m.last_trade_price)
-        return MidpointOut(midpoint=mid)
+            mid = float(m.last_trade_price)
+        # Synced bestBid/bestAsk describe the first (Yes) leg only; the second
+        # leg of a binary market trades at the complement.
+        tokens = (m.clob_token_ids or []) if m else []
+        if len(tokens) >= 2 and token_id == tokens[1]:
+            mid = 1.0 - mid
+        return MidpointOut(midpoint=str(round(mid, 6)))
 
     @app.get("/spread", response_model=SpreadOut, tags=["clob"])
     async def get_spread(token_id: str, session: Session = Depends(get_session)) -> SpreadOut:
