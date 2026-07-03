@@ -573,7 +573,7 @@ form.search button:hover { background: #f0f0f0; color: #000; }
 /// The standalone get-started page: how a student goes from zero to trading,
 /// with a one-click download of the client served from this domain.
 const ONBOARD: &str = r##"<section class="onboard">
-<h2><span class="dim">$</span> get started — trade in 4 steps</h2>
+<h2>get started — trade in 4 steps</h2>
 <ol>
 <li>Ask a club admin for your <strong>API key</strong> (it looks like <code>pm_paper_…</code>). You start with $25,000 of paper money.</li>
 <li>Download the one-file client:<a class="btn" href="/predlab.py" download="predlab.py">⬇ predlab.py</a></li>
@@ -595,20 +595,20 @@ print(poly.positions())                          # what you now hold</pre>
 /// "is this real money?" and "how is my score calculated?". The net-worth
 /// formula mirrors `compute_net_worth` in the sim so it stays accurate.
 const ABOUT: &str = r##"<section class="onboard">
-<h2><span class="dim">$</span> what is predlab?</h2>
+<h2>what is predlab?</h2>
 <p>PredLab is the paper-trading playground for the <strong>NCSSM Prediction Markets Club</strong>. You trade Polymarket-style yes/no markets with <strong>$25,000 of fake money</strong>, practice real strategies, and climb a live club leaderboard.</p>
 <p class="dim">Paper trading only · not affiliated with Polymarket · educational use · the money is fake, the prices are real.</p>
 
-<h2 style="margin-top:18px"><span class="dim">$</span> how the markets work</h2>
+<h2 style="margin-top:18px">how the markets work</h2>
 <p>A market asks a yes/no question (“Will X happen?”). You buy <strong>YES</strong> or <strong>NO</strong> shares priced $0.01–$0.99 — the price <em>is</em> the market's implied probability. A winning share pays <strong>$1.00</strong> at resolution; a losing share pays <strong>$0</strong>. Prices are pulled live from the real Polymarket Gamma API, but there is <strong>no house market-maker</strong>: your order fills only when another member takes the other side.</p>
 
-<h2 style="margin-top:18px"><span class="dim">$</span> how your score is computed</h2>
+<h2 style="margin-top:18px">how your score is computed</h2>
 <pre class="snippet">net worth = free cash
           + open positions marked at the current price
           + cash escrowed in your resting buy orders</pre>
 <p>That net-worth figure is your leaderboard score, and the <strong>P&amp;L</strong> column shows it against the $25,000 you started with. Your line on your profile page updates on every fill and every few minutes.</p>
 
-<h2 style="margin-top:18px"><span class="dim">$</span> fair play &amp; AI</h2>
+<h2 style="margin-top:18px">fair play &amp; AI</h2>
 <p>AI use is <strong>unrestricted and encouraged</strong> — bring your own model, framework, or none at all. It's fake money and a learning sandbox: experiment freely, but don't try to break the sim for everyone else.</p>
 </section>
 <p class="nav"><a href="/">← back to leaderboard</a> · <a href="/markets">→ browse markets</a> · <a href="/start">→ get a key</a></p>"##;
@@ -645,8 +645,8 @@ fn document(title: &str, refresh: Option<u32>, body: &str) -> String {
 /// inject ``<a>`` links into the table after escaping it.
 fn page_shell(board_inner: &str) -> String {
     let board = format!(
-        "<span class=\"dim\">$</span> predlab leaderboard\n\n{}\n\n\
-         <span class=\"dim\"># click a member to see their graph · refreshes every {}s · paper trading only</span>",
+        "predlab leaderboard\n\n{}\n\n\
+         <span class=\"dim\">click a member to see their graph · refreshes every {}s · paper trading only</span>",
         board_inner,
         REFRESH_SECS,
     );
@@ -699,7 +699,7 @@ fn club_stats(rows: &[Leader], start_balance: f64) -> String {
         fmt_money(deployed),
         fmt_money(cash),
     );
-    format!("<span class=\"dim\"># club stats</span>\n{}", esc(&kv))
+    format!("<span class=\"dim\">club stats</span>\n{}", esc(&kv))
 }
 
 fn render_page(rows: &[Leader], start_balance: f64) -> String {
@@ -791,8 +791,8 @@ fn render_markets_page(markets: &[Market], q: &str, offset: u32) -> String {
     }
 
     let board = format!(
-        "<span class=\"dim\">$</span> predlab markets\n\n{}\n\n\
-         <span class=\"dim\"># live Polymarket prices · YES = implied probability · paper trading only</span>",
+        "predlab markets\n\n{}\n\n\
+         <span class=\"dim\">live Polymarket prices · YES = implied probability · paper trading only</span>",
         table,
     );
     let body = format!(
@@ -951,7 +951,7 @@ fn render_summary_block(d: &UserDetail, rank: Option<usize>) -> String {
         format!(" · {}", d.role)
     };
     let header = format!(
-        "<span class=\"dim\">$</span> predlab member · {}{}",
+        "predlab member · {}{}",
         esc(&d.username),
         esc(&role_suffix),
     );
@@ -975,7 +975,7 @@ fn render_summary_block(d: &UserDetail, rank: Option<usize>) -> String {
 }
 
 fn render_positions_block(positions: &[DetailPosition]) -> String {
-    let title = "<span class=\"dim\"># positions</span>";
+    let title = "<span class=\"dim\">positions</span>";
     if positions.is_empty() {
         return format!("{title}\n\n  <span class=\"dim\">(no open positions)</span>");
     }
@@ -1010,7 +1010,7 @@ fn render_positions_block(positions: &[DetailPosition]) -> String {
 }
 
 fn render_trades_block(trades: &[DetailTrade]) -> String {
-    let title = "<span class=\"dim\"># recent trades</span>";
+    let title = "<span class=\"dim\">recent trades</span>";
     if trades.is_empty() {
         return format!("{title}\n\n  <span class=\"dim\">(no trades yet)</span>");
     }
@@ -1066,7 +1066,7 @@ fn render_profile_page(d: &UserDetail, rank: Option<usize>) -> String {
 
 fn render_profile_error(username: &str, msg: &str) -> String {
     let title = format!(
-        "<span class=\"dim\">$</span> predlab member · {}",
+        "predlab member · {}",
         esc(username),
     );
     let body_pre = format!(
@@ -1128,7 +1128,7 @@ mod tests {
         assert!(html.contains("+$5,000.00")); // alice up 5k
         assert!(html.contains("-$5,000.00")); // bob down 5k
         // club-stats block
-        assert!(html.contains("# club stats"));
+        assert!(html.contains("club stats"));
         assert!(html.contains("members"));
         assert!(html.contains("paper AUM"));
         assert!(html.contains("$50,000.00")); // total AUM
@@ -1277,10 +1277,10 @@ mod tests {
         assert!(html.contains("#1"));
         assert!(html.contains("$29,444.44"));
         assert!(html.contains("<svg") && html.contains("</svg>"));
-        assert!(html.contains("POSITIONS") || html.contains("# positions"));
+        assert!(html.contains("POSITIONS") || html.contains("positions"));
         assert!(html.contains("UNREALIZED"));
         assert!(html.contains("$4,444.44")); // unrealized P&L
-        assert!(html.contains("# recent trades"));
+        assert!(html.contains("recent trades"));
         assert!(html.contains("BUY"));
         assert!(html.contains(r#"href="/""#)); // back to leaderboard
         // No auto-refresh on the profile page.
