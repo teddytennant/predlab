@@ -35,6 +35,43 @@ impl Default for TradeState {
     }
 }
 
+impl TradeState {
+    /// Round a price onto the ticket's 1¢ tick and clamp it into the valid
+    /// limit range (0.01..=0.99).
+    pub(crate) fn clamp_to_tick(price: f64) -> f64 {
+        ((price * 100.0).round() / 100.0).clamp(0.01, 0.99)
+    }
+
+    /// The single entry point every "open the ticket pre-filled" flow uses
+    /// (Markets "Trade this market", Portfolio "Sell" / "Buy back"). Only
+    /// stages the ticket — nothing is submitted until the user clicks.
+    pub(crate) fn prefill(
+        &mut self,
+        token_id: &str,
+        label: String,
+        side: OrderSide,
+        price: f64,
+        size: f64,
+    ) {
+        self.token_id = token_id.to_string();
+        self.label = label;
+        self.side = side;
+        self.market_order = false;
+        self.price = Self::clamp_to_tick(price);
+        self.size = size;
+        self.error = None;
+    }
+}
+
+/// Estimate line for a limit order: buys cost money, sells raise proceeds.
+fn estimate_line(side: OrderSide, price: f64, size: f64) -> String {
+    let amount = predlab_util::fmt_money(price * size);
+    match side {
+        OrderSide::Buy => format!("≈ {amount} cost"),
+        OrderSide::Sell => format!("≈ {amount} proceeds"),
+    }
+}
+
 /// True when an order in this status can still be cancelled.
 fn cancellable(status: &str) -> bool {
     let s = status.to_ascii_lowercase();
@@ -103,11 +140,15 @@ fn ticket(app: &mut App, ui: &mut Ui) {
                 );
                 ui.end_row();
 
-                ui.label("Est. value");
+                ui.label("Estimate");
                 if app.trade.market_order {
                     ui.label(RichText::new("market price × size").weak());
                 } else {
-                    ui.monospace(predlab_util::fmt_money(app.trade.price * app.trade.size));
+                    ui.monospace(estimate_line(
+                        app.trade.side,
+                        app.trade.price,
+                        app.trade.size,
+                    ));
                 }
                 ui.end_row();
             });
@@ -224,7 +265,7 @@ fn orders_table(app: &mut App, ui: &mut Ui, snap: &Snapshot) {
 
 #[cfg(test)]
 mod tests {
-    use super::cancellable;
+    use super::*;
 
     #[test]
     fn open_like_statuses_are_cancellable() {
@@ -238,5 +279,41 @@ mod tests {
         for s in ["filled", "cancelled", "canceled", "expired", "rejected", ""] {
             assert!(!cancellable(s), "{s} should not be cancellable");
         }
+    }
+
+    #[test]
+    fn clamp_to_tick_rounds_and_clamps() {
+        assert_eq!(TradeState::clamp_to_tick(0.5),   0.50);
+        assert_eq!(TradeState::clamp_to_tick(0.123), 0.12, "rounds to the 1¢ tick");
+        assert_eq!(TradeState::clamp_to_tick(0.567), 0.57);
+        assert_eq!(TradeState::clamp_to_tick(0.005), 0.01, "floor of the range");
+        assert_eq!(TradeState::clamp_to_tick(0.0),   0.01);
+        assert_eq!(TradeState::clamp_to_tick(-3.0),  0.01);
+        assert_eq!(TradeState::clamp_to_tick(0.999), 0.99, "ceiling of the range");
+        assert_eq!(TradeState::clamp_to_tick(42.0),  0.99);
+    }
+
+    #[test]
+    fn estimate_reads_as_cost_for_buys_and_proceeds_for_sells() {
+        assert_eq!(estimate_line(OrderSide::Buy, 0.55, 10.0), "≈ $5.50 cost");
+        assert_eq!(estimate_line(OrderSide::Sell, 0.55, 10.0), "≈ $5.50 proceeds");
+        assert_eq!(estimate_line(OrderSide::Sell, 0.30, 3.0), "≈ $0.90 proceeds");
+    }
+
+    #[test]
+    fn prefill_stages_a_reviewable_sell_ticket() {
+        let mut state = TradeState {
+            market_order: true,
+            error: Some("stale".to_string()),
+            ..TradeState::default()
+        };
+        state.prefill("tok-yes", "Will it rain? — Yes".to_string(), OrderSide::Sell, 0.6234, 5.0);
+        assert_eq!(state.token_id, "tok-yes");
+        assert_eq!(state.label, "Will it rain? — Yes");
+        assert_eq!(state.side, OrderSide::Sell, "side toggle reflects the prefilled SELL");
+        assert_eq!(state.price, 0.62, "price snapped to the ticket tick");
+        assert_eq!(state.size, 5.0);
+        assert!(!state.market_order, "prefill always stages a limit order");
+        assert!(state.error.is_none(), "stale validation errors cleared");
     }
 }

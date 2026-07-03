@@ -537,3 +537,131 @@ fn g_engine_loop_smoke() {
     }
     engine.shutdown();
 }
+
+// ---------------------------------------------------------------------------
+// (h) Portfolio unwind flow: position in snapshot -> prefilled SELL round-trip
+// ---------------------------------------------------------------------------
+
+/// End-to-end for the Portfolio "Sell" action: a real fill creates a long
+/// position, the engine snapshot exposes it, and the prefilled sell (same
+/// values the ticket stages: side SELL, |size|, current_price snapped to the
+/// 1¢ tick) round-trips through `Command::PlaceOrder` + `CancelOrder`.
+///
+/// Set `PREDLAB_LIVE_TRADER_KEY` to run against an existing account
+/// (assertions tolerate prior positions); by default a fresh member is used.
+#[test]
+#[ignore = "requires the running local stack"]
+fn h_portfolio_unwind_prefill_roundtrip() {
+    let http = Http::new();
+    let cfg = live_config();
+    let owner = PolyClient::new(&http, &cfg);
+
+    let markets = owner.markets(50, 0, "").expect("GET /markets");
+    let token_id = tradeable_market(&markets).clob_token_ids.as_ref().unwrap()[0].clone();
+
+    // Trader: env-provided key or a fresh member.
+    let trader_key = match std::env::var("PREDLAB_LIVE_TRADER_KEY") {
+        Ok(k) if !k.is_empty() => k,
+        _ => {
+            owner
+                .create_paper_key(&unique("live_unwind"), "Live Unwind", Role::Member)
+                .expect("mint trader key")
+                .api_key
+        }
+    };
+    let trader_cfg = Config {
+        poly_api_key: trader_key,
+        ..live_config()
+    };
+    let trader = PolyClient::new(&http, &trader_cfg);
+
+    // Counterparty rests an ask (a short — the sim allows selling beyond
+    // holdings), then the trader buys through it for a real fill.
+    let counterparty_name = unique("live_maker");
+    let maker_key = owner
+        .create_paper_key(&counterparty_name, "Live Maker", Role::Member)
+        .expect("mint maker key");
+    let maker_cfg = Config {
+        poly_api_key: maker_key.api_key,
+        poly_admin_secret: String::new(),
+        ..live_config()
+    };
+    let maker = PolyClient::new(&http, &maker_cfg);
+    let held_before = trader
+        .positions()
+        .expect("positions before")
+        .iter()
+        .find(|p| p.clob_token_id == token_id)
+        .map(|p| p.size)
+        .unwrap_or(0.0);
+    let ask = maker
+        .place_order(&token_id, OrderSide::Sell, Some(0.03), 3.0)
+        .expect("maker rests an ask");
+    assert!(ask.success, "maker ask accepted: {:?}", ask.error_msg);
+    let buy = trader
+        .place_order(&token_id, OrderSide::Buy, Some(0.03), 3.0)
+        .expect("trader crosses the ask");
+    assert!(buy.success, "buy accepted: {:?}", buy.error_msg);
+    assert_eq!(buy.status, "filled", "crossing buy fills immediately");
+
+    // The engine snapshot must now show the long position.
+    let engine = EngineHandle::spawn(trader_cfg);
+    engine
+        .tx
+        .send(EngineMessage::Command(Command::RefreshAll))
+        .unwrap();
+    let (ok, detail, _) = engine.wait_for_result(ActionKind::RefreshAll, Duration::from_secs(30));
+    assert!(ok, "RefreshAll ok: {detail}");
+    let (size, current_price) = {
+        let snap = engine.snapshot.lock().unwrap();
+        let pos = snap
+            .positions
+            .iter()
+            .find(|p| p.clob_token_id == token_id)
+            .expect("filled position visible in the snapshot");
+        assert!(
+            (pos.size - (held_before + 3.0)).abs() < 1e-6,
+            "position grew by the fill: {} -> {}",
+            held_before,
+            pos.size
+        );
+        (pos.size, pos.current_price)
+    };
+
+    // Prefilled sell exactly as the Portfolio row stages it: SELL, |size|,
+    // current price snapped to the ticket's 1¢ tick.
+    let price = ((current_price * 100.0).round() / 100.0).clamp(0.01, 0.99);
+    engine
+        .tx
+        .send(EngineMessage::Command(Command::PlaceOrder {
+            token_id: token_id.clone(),
+            side: OrderSide::Sell,
+            price: Some(price),
+            size,
+        }))
+        .unwrap();
+    let (ok, detail, _) = engine.wait_for_result(ActionKind::PlaceOrder, Duration::from_secs(15));
+    assert!(ok, "prefilled sell accepted: {detail}");
+    // detail = "order {id} {status}"
+    let order_id = detail
+        .split_whitespace()
+        .nth(1)
+        .expect("order id in the result detail")
+        .to_string();
+
+    // Cancel the resting remainder so the account is left clean.
+    engine
+        .tx
+        .send(EngineMessage::Command(Command::CancelOrder {
+            order_id: order_id.clone(),
+        }))
+        .unwrap();
+    let (ok, detail, _) = engine.wait_for_result(ActionKind::CancelOrder, Duration::from_secs(15));
+    assert!(ok, "cancel of {order_id} ok: {detail}");
+    engine.shutdown();
+
+    // Tidy the throwaway counterparty (clears its short).
+    owner
+        .reset_balance(Some(&counterparty_name))
+        .expect("reset counterparty");
+}

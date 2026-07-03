@@ -6,9 +6,10 @@ use egui_extras::{Column, TableBuilder};
 use predlab_util::{fmt_money, truncate};
 
 use crate::data::Snapshot;
-use crate::message::Command;
+use crate::domain::polymarket::PolyPosition;
+use crate::message::{Command, OrderSide};
 use crate::ui::widgets::{self, AMBER};
-use crate::ui::App;
+use crate::ui::{App, View};
 
 pub(crate) fn show(app: &mut App, ui: &mut Ui, snap: &Snapshot) {
     ui.heading("Portfolio");
@@ -30,7 +31,7 @@ pub(crate) fn show(app: &mut App, ui: &mut Ui, snap: &Snapshot) {
             ui.add_space(10.0);
 
             ui.strong("Positions");
-            positions_table(ui, snap);
+            positions_table(app, ui, snap);
             ui.add_space(10.0);
 
             ui.strong("Open orders");
@@ -72,11 +73,24 @@ fn stat_row(ui: &mut Ui, snap: &Snapshot) {
     });
 }
 
-fn positions_table(ui: &mut Ui, snap: &Snapshot) {
+/// The row action for a position: sells unwind longs, buys cover shorts
+/// (the sim represents a short as a negative size).
+fn unwind_action(size: f64) -> Option<(&'static str, OrderSide)> {
+    if size > 0.0 {
+        Some(("Sell", OrderSide::Sell))
+    } else if size < 0.0 {
+        Some(("Buy back", OrderSide::Buy))
+    } else {
+        None
+    }
+}
+
+fn positions_table(app: &mut App, ui: &mut Ui, snap: &Snapshot) {
     if snap.positions.is_empty() {
         ui.label(RichText::new("no positions").weak());
         return;
     }
+    let mut unwind: Option<&PolyPosition> = None;
     TableBuilder::new(ui)
         .id_salt("positions")
         .striped(true)
@@ -87,8 +101,9 @@ fn positions_table(ui: &mut Ui, snap: &Snapshot) {
         .column(Column::auto().at_least(70.0))
         .column(Column::auto().at_least(70.0))
         .column(Column::auto().at_least(90.0))
+        .column(Column::auto().at_least(80.0))
         .header(20.0, |mut header| {
-            for title in ["Question", "Size", "Avg entry", "Current", "Unrealized PnL"] {
+            for title in ["Question", "Size", "Avg entry", "Current", "Unrealized PnL", ""] {
                 header.col(|ui| {
                     ui.strong(title);
                 });
@@ -120,9 +135,38 @@ fn positions_table(ui: &mut Ui, snap: &Snapshot) {
                                 .color(widgets::signed_color(pos.unrealized_pnl)),
                         );
                     });
+                    row.col(|ui| {
+                        if let Some((verb, _)) = unwind_action(pos.size)
+                            && ui
+                                .small_button(verb)
+                                .on_hover_text(
+                                    "Pre-fill the trade ticket to unwind this position — \
+                                     review and submit there",
+                                )
+                                .clicked()
+                        {
+                            unwind = Some(pos);
+                        }
+                    });
                 });
             }
         });
+    if let Some(pos) = unwind
+        && let Some((_, side)) = unwind_action(pos.size)
+    {
+        let question = pos
+            .market_question
+            .clone()
+            .unwrap_or_else(|| pos.clob_token_id.clone());
+        app.trade.prefill(
+            &pos.clob_token_id,
+            truncate(&question, 60),
+            side,
+            pos.current_price,
+            pos.size.abs(),
+        );
+        app.view = View::Trade;
+    }
 }
 
 fn orders_table(app: &mut App, ui: &mut Ui, snap: &Snapshot) {
@@ -181,5 +225,17 @@ fn orders_table(app: &mut App, ui: &mut Ui, snap: &Snapshot) {
         });
     if let Some(order_id) = cancel {
         app.send_command(Command::CancelOrder { order_id });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn longs_sell_shorts_buy_back_flats_hide() {
+        assert_eq!(unwind_action(5.0), Some(("Sell", OrderSide::Sell)));
+        assert_eq!(unwind_action(-3.0), Some(("Buy back", OrderSide::Buy)));
+        assert_eq!(unwind_action(0.0), None, "flat rows get no action");
     }
 }

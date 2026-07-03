@@ -9,7 +9,7 @@ use predlab_util::truncate;
 
 use crate::data::Snapshot;
 use crate::domain::polymarket::PolyMarket;
-use crate::message::Command;
+use crate::message::{Command, OrderSide};
 use crate::ui::widgets::{self, GREEN, RED};
 use crate::ui::{App, View};
 
@@ -266,19 +266,45 @@ fn detail_pane(app: &mut App, ui: &mut Ui, snap: &Snapshot) {
                 }
             }
         }
-        if let Some(token_id) = sel.token_id()
-            && ui.button("Trade this market").clicked()
-        {
-            app.trade.token_id = token_id.to_string();
-            app.trade.label = format!(
+        if let Some(token_id) = sel.token_id() {
+            let label = format!(
                 "{} — {}",
                 truncate(&sel.question, 60),
                 sel.outcome_name()
             );
-            if let Some(best_ask) = snap.selected_book.as_ref().and_then(|b| b.asks.first()) {
-                app.trade.price = best_ask.price.clamp(0.01, 0.99);
+            if ui.button("Trade this market").clicked() {
+                let price = snap
+                    .selected_book
+                    .as_ref()
+                    .and_then(|b| b.asks.first())
+                    .map(|ask| ask.price)
+                    .unwrap_or(app.trade.price);
+                let size = app.trade.size;
+                app.trade
+                    .prefill(token_id, label.clone(), OrderSide::Buy, price, size);
+                app.view = View::Trade;
             }
-            app.view = View::Trade;
+            // Held here? Offer to unwind the position from the same pane.
+            if let Some(pos) = snap
+                .positions
+                .iter()
+                .find(|p| p.clob_token_id == token_id && p.size != 0.0)
+            {
+                let (verb, side) = if pos.size > 0.0 {
+                    ("Sell", OrderSide::Sell)
+                } else {
+                    ("Buy back", OrderSide::Buy)
+                };
+                if ui
+                    .button(format!("{verb} {:.0}", pos.size.abs()))
+                    .on_hover_text("Pre-fill the trade ticket to unwind your position")
+                    .clicked()
+                {
+                    app.trade
+                        .prefill(token_id, label, side, pos.current_price, pos.size.abs());
+                    app.view = View::Trade;
+                }
+            }
         }
         if ui.small_button("✕").on_hover_text("Close detail").clicked() {
             app.markets.selected = None;
