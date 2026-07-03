@@ -1,4 +1,4 @@
-.PHONY: help up down logs clean test test-sims test-admin test-tui test-leaderboard lint admin install-admin tui install-tui
+.PHONY: help up down logs clean test test-sims test-admin test-tui test-gui test-leaderboard lint admin install-admin tui install-tui gui install-gui
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-15s\033[0m %s\n", $$1, $$2}'
@@ -24,7 +24,13 @@ tui: ## Run the member TUI (against the configured POLY_BASE)
 install-tui: ## Install the `predlab-tui` member binary onto your PATH
 	cd predlab-tui && cargo install --path .
 
-test: test-sims test-admin test-tui test-leaderboard ## Run every test suite
+gui: ## Run the desktop GUI (against the configured servers)
+	cargo run -p predlab-gui --release
+
+install-gui: ## Install the `predlab-gui` desktop binary onto your PATH
+	cargo install --path predlab-gui --locked
+
+test: test-sims test-admin test-tui test-gui test-leaderboard ## Run every test suite
 
 test-sims: ## Run the Python simulator test suite
 	cd polymarket-sim && python -m pytest -q
@@ -35,6 +41,9 @@ test-admin: ## Run the Rust admin test suite
 test-tui: ## Run the member TUI test suite
 	cd predlab-tui && cargo test
 
+test-gui: ## Run the desktop GUI test suite
+	cd predlab-gui && cargo test
+
 test-leaderboard: ## Run the leaderboard web-server test suite
 	cd leaderboard-rs && cargo test
 
@@ -42,6 +51,7 @@ lint: ## Run linters across the repo
 	cd polymarket-sim && ruff check src/ tests/
 	cd ratatui-admin && cargo clippy --quiet
 	cd predlab-tui && cargo clippy --quiet
+	cd predlab-gui && cargo clippy --quiet
 	cd leaderboard-rs && cargo clippy --quiet
 
 clean: ## Remove containers, volumes, and caches
@@ -51,4 +61,5 @@ clean: ## Remove containers, volumes, and caches
 	find . -type d -name ".ruff_cache" -exec rm -rf {} + 2>/dev/null || true
 	cd ratatui-admin && cargo clean 2>/dev/null || true
 	cd predlab-tui && cargo clean 2>/dev/null || true
+	cd predlab-gui && cargo clean 2>/dev/null || true
 	cd leaderboard-rs && cargo clean 2>/dev/null || true

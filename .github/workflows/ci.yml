@@ -47,6 +47,27 @@ jobs:
       - name: Clippy
         run: cargo clippy -- -D warnings
 
+  gui:
+    name: predlab-gui (cargo test)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: predlab-gui
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install eframe build deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev libxkbcommon-dev libssl-dev
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: Test
+        run: cargo test
+      - name: Clippy
+        run: cargo clippy -- -D warnings
+
   leaderboard:
     name: leaderboard-rs (cargo test)
     runs-on: ubuntu-latest

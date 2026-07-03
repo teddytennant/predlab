@@ -34,6 +34,8 @@ pip install requests
 
 > **Prefer a terminal?** [`predlab-tui`](predlab-tui/) is a vim-flavored TUI clone of the leaderboard site: standings, markets, and your portfolio in one window. Install with `cargo install --git https://github.com/teddytennant/predlab predlab-tui`, then `export POLY_API_KEY=…` and run `predlab-tui`. The install page (with screenshots and key reference) is also linked from [predlab.teddytennant.com/tui](https://predlab.teddytennant.com/tui).
 
+> **Prefer a desktop app?** [`predlab-gui`](predlab-gui/) is a native desktop client: markets with live order books, a point-and-click trade ticket, your portfolio, and the leaderboard with member profiles. Install with `cargo install --git https://github.com/teddytennant/predlab predlab-gui --locked` and run `predlab-gui` — a first-run wizard walks you through pasting your key, and it points at the club server by default.
+
 ### Step 2 — Plug in your key
 
 In a Python shell or script **in the same folder** as `predlab.py`:
@@ -141,6 +143,7 @@ predlab/
 ├── leaderboard-rs/   # Public live leaderboard page (Rust / axum)             :8003
 ├── ratatui-admin/    # Admin TUI (Rust): issue keys + manage club roster
 ├── predlab-tui/      # Member TUI (Rust): vim leaderboard + markets + portfolio
+├── predlab-gui/      # Desktop GUI (Rust / egui): trade, portfolio, admin panel
 ├── examples/         # Member starter client (predlab.py)
 ├── docker-compose.yml
 └── Makefile
@@ -175,6 +178,10 @@ Three tabs (`l`/`h` or Tab to switch):
 - **Leaderboard** — live ranking by paper net worth (`r` to refresh).
 
 Env vars: `POLY_URL` (default http://localhost:8001), `PREDLAB_ADMIN_SECRET` (for `X-Admin-Secret`).
+
+### Desktop GUI admin panel
+
+The desktop app ([`predlab-gui`](predlab-gui/), `make gui` / `make install-gui`) has an Admin view too: issue keys with a role picker (member/admin/owner), revoke keys, reset one or all balances, browse the server-side roster with per-member profiles, and force-resolve markets. It unlocks with the master secret in its Settings — or automatically when your own API key has the admin role.
 
 ### Roles
 

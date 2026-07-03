@@ -1,10 +1,10 @@
-# Workspace for the local PredLab developer tools (the two ratatui TUIs and
-# their shared util crate). `leaderboard-rs` is deliberately NOT a member: it
-# ships as a self-contained Docker image whose build context only copies its
-# own crate, so it must keep resolving as a standalone package.
+# Workspace for the local PredLab developer tools (the two ratatui TUIs, the
+# desktop GUI and their shared util crate). `leaderboard-rs` is deliberately
+# NOT a member: it ships as a self-contained Docker image whose build context
+# only copies its own crate, so it must keep resolving as a standalone package.
 [workspace]
 resolver = "2"
-members = ["predlab-util", "predlab-tui", "ratatui-admin"]
+members = ["predlab-util", "predlab-tui", "predlab-gui", "ratatui-admin"]
 exclude = ["leaderboard-rs"]
 
 # Profiles only take effect at the workspace root, so the member binaries'

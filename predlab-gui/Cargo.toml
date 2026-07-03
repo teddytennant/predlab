@@ -1,0 +1,32 @@
+[package]
+name = "predlab-gui"
+version = "0.1.0"
+edition = "2024"
+description = "PredLab desktop GUI: trade on the club's paper simulator and run the club"
+
+[lib]
+name = "predlab_gui"
+path = "src/lib.rs"
+
+[[bin]]
+name = "predlab-gui"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = "1.0.103"
+chrono = { version = "0.4.45", features = ["serde"] }
+dirs = "6.0.0"
+eframe = "0.35.0"
+egui = "0.35"
+egui_extras = "0.35"
+env_logger = "0.11.11"
+log = "0.4.33"
+predlab-util = { version = "0.1.0", path = "../predlab-util" }
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.150"
+thiserror = "2.0.18"
+toml = "1.1.2"
+ureq = { version = "3.3.0", features = ["json"] }
+
+[dev-dependencies]
+uuid = { version = "1.23.4", features = ["v4"] }
