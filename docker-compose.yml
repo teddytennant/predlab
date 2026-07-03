@@ -21,7 +21,7 @@ services:
       context: ./polymarket-sim
       dockerfile: Dockerfile
     ports:
-      - "8001:8001"
+      - "127.0.0.2:8001:8001"
     environment:
       - PORT=8001
       - DATABASE_URL=postgresql+psycopg2://predlab:predlab@postgres:5432/polymarket
