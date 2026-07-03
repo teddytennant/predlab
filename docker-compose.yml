@@ -40,7 +40,7 @@ services:
 
   leaderboard:
     build:
-      # Repo root so the build can embed examples/predlab.py (served at /predlab.py).
+      # Repo root so the build can embed predlab-py/src/predlab/__init__.py (served at /predlab.py).
       context: .
       dockerfile: leaderboard-rs/Dockerfile
     ports:

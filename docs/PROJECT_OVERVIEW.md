@@ -34,7 +34,7 @@ market-maker** — your order fills only when another member takes the other sid
 | `ratatui-admin/` | Rust · ratatui (TUI) | — | Admin console: issue/revoke keys, manage roster, reset balances |
 | `predlab-tui/` | Rust · ratatui (TUI) | — | Member TUI: leaderboard + markets + portfolio in one window |
 | `predlab-util/` | Rust (lib) | — | Shared formatting/util crate for the two TUIs |
-| `examples/predlab.py` | Python (single file) | — | Member starter client (`pip install requests`) |
+| `predlab-py/` | Python (uv package) | — | Member starter client (`uv sync`) |
 
 Deployment is a `docker compose` stack (Postgres + sim + leaderboard) on a NixOS host,
 exposed through a **Cloudflare Tunnel** — no open inbound ports.
@@ -69,7 +69,7 @@ predlab/
 ├── ratatui-admin/    # Admin TUI (issue keys, manage roster)
 ├── predlab-tui/      # Member TUI (leaderboard + markets + portfolio)
 ├── predlab-util/     # Shared Rust util crate
-├── examples/         # Member starter client (predlab.py)
+├── predlab-py/       # Member starter client (Python, uv-packaged)
 ├── docs/             # This overview, review report, club docs, Telegram plan
 ├── docker-compose.yml
 └── Makefile

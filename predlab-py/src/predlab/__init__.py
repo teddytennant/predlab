@@ -1,13 +1,7 @@
-#!/usr/bin/env python3
-"""PredLab starter client — trade the Polymarket-style club simulator.
+"""PredLab client — trade the Polymarket-style club paper simulator.
 
-A tiny client for the paper-trading sim. Auth is just your API key in a header.
-No SDK needed; only `requests` required (pip install -r requirements.txt).
-
-Quick start (use the key your admin gave you):
-
-    export POLY_API_KEY="pm_paper_..."     # your Polymarket paper API key
-    python predlab.py                      # smoke test (read-only)
+    export POLY_API_KEY="pm_paper_..."     # key your admin gave you
+    python -c "from predlab import PolymarketClient; print(PolymarketClient().markets(limit=1))"
 
 Override POLY_BASE to point at a local sim instead of the club host.
 """
@@ -19,6 +13,7 @@ from typing import Any
 
 import requests
 
+__all__ = ["PolymarketClient"]
 
 POLY_BASE = os.environ.get("POLY_BASE", "https://poly.teddytennant.com")
 
@@ -28,7 +23,7 @@ class PolymarketClient:
 
     def __init__(self, base_url: str = POLY_BASE, api_key: str | None = None):
         self.base = base_url.rstrip("/")
-        self.key = api_key
+        self.key = api_key or os.environ.get("POLY_API_KEY")
 
     def _headers(self) -> dict[str, str]:
         return {"POLY_API_KEY": self.key} if self.key else {}
@@ -46,13 +41,19 @@ class PolymarketClient:
         return r.json()
 
     def positions(self) -> Any:
-        """Your positions (requires POLY_KEY)."""
+        """Your positions (requires POLY_API_KEY)."""
         r = requests.get(f"{self.base}/positions", headers=self._headers(), timeout=15)
         r.raise_for_status()
         return r.json()
 
+    def portfolio(self) -> Any:
+        """Your cash, positions value, and net worth (requires POLY_API_KEY)."""
+        r = requests.get(f"{self.base}/portfolio", headers=self._headers(), timeout=15)
+        r.raise_for_status()
+        return r.json()
+
     def place_order(self, token_id: str, side: str, price: float, size: float) -> Any:
-        """Buy or sell `size` shares of `token_id` at `price` (0.0–1.0).
+        """Buy or sell `size` shares of `token_id` at `price` (0.0-1.0).
         side: "BUY" or "SELL".
         """
         body = {"token_id": token_id, "side": side.upper(), "price": price, "size": size}
@@ -63,7 +64,7 @@ class PolymarketClient:
     def cancel_order(self, order_id: int | str) -> Any:
         """Cancel one of your resting orders by id (requires POLY_API_KEY).
 
-        Use this to clear an order that's still `open` (unfilled) — the buy
+        Use this to clear an order that's still `open` (unfilled) - the buy
         escrow is refunded to your cash.
         """
         body = {"orderID": str(order_id)}
@@ -74,16 +75,16 @@ class PolymarketClient:
 
 def _smoke() -> None:
     """Quick connectivity + auth check."""
-    poly = PolymarketClient(api_key=os.environ.get("POLY_API_KEY"))
+    poly = PolymarketClient()
     mkts = poly.markets(limit=1)
-    print(f"✅ Polymarket reachable — sample: {str(mkts)[:80]}…")
+    print(f"reachable - sample: {str(mkts)[:80]}...")
     if poly.key:
         try:
-            print(f"   your positions: {poly.positions()}")
+            print(f"your positions: {poly.positions()}")
         except Exception as e:
-            print(f"   (positions check failed: {e})")
+            print(f"(positions check failed: {e})")
     else:
-        print("   (set POLY_API_KEY to also test authenticated calls)")
+        print("(set POLY_API_KEY to also test authenticated calls)")
 
 
 if __name__ == "__main__":

@@ -1,5 +1,5 @@
 # Build context is the REPO ROOT (see docker-compose.yml) so build.rs can embed
-# the canonical examples/predlab.py that we serve at /predlab.py.
+# the canonical predlab-py/src/predlab/__init__.py that we serve at /predlab.py.
 
 # --- build ---
 FROM rust:1-bookworm AS builder
@@ -8,8 +8,8 @@ COPY leaderboard-rs/Cargo.toml leaderboard-rs/Cargo.lock ./leaderboard-rs/
 COPY leaderboard-rs/.cargo ./leaderboard-rs/.cargo
 COPY leaderboard-rs/build.rs ./leaderboard-rs/build.rs
 COPY leaderboard-rs/src ./leaderboard-rs/src
-# Embedded by build.rs as ../examples/predlab.py relative to the crate.
-COPY examples/predlab.py ./examples/predlab.py
+# Embedded by build.rs as ../predlab-py/src/predlab/__init__.py relative to the crate.
+COPY predlab-py/src/predlab/__init__.py ./predlab-py/src/predlab/__init__.py
 WORKDIR /app/leaderboard-rs
 RUN cargo build --release
 
