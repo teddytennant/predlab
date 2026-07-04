@@ -653,7 +653,7 @@ fn page_shell(board_inner: &str) -> String {
         "<pre class=\"board\">{board}</pre>\n\
          <p class=\"nav\"><a href=\"/markets\">→ browse markets</a> · \
          <a href=\"/about\">→ rules</a> · \
-         <a href=\"/start\">→ get your key</a></p>",
+         <a href=\"https://github.com/teddytennant/predlab\">github.com/teddytennant/predlab</a></p>",
         board = board,
     );
     document("predlab · leaderboard", Some(REFRESH_SECS), &body)
@@ -1142,11 +1142,12 @@ mod tests {
     }
 
     #[test]
-    fn leaderboard_links_to_start_page() {
+    fn leaderboard_links_to_github_markets_and_about() {
         let html = render_page(&[leader("alice", 25000.0)], 25000.0);
-        assert!(html.contains(r#"href="/start""#));
+        assert!(html.contains(r#"href="https://github.com/teddytennant/predlab""#));
         assert!(html.contains(r#"href="/markets""#));
         assert!(html.contains(r#"href="/about""#));
+        assert!(!html.contains(r#"href="/start""#));
         // onboarding itself is NOT on the board page anymore
         assert!(!html.contains("pip install requests"));
     }
